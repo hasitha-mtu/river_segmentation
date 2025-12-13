@@ -416,6 +416,24 @@ def main():
     trainer = Trainer(args)
     trainer.train()
 
+def train_all_models():
+    args = parse_args()
+    
+    # Set random seeds
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+
+    model_names = ['unet', 'unetpp', 'resunetpp', 'deeplabv3plus', 'deeplabv3plus_cbam']
+    for model_name in model_names:
+        args.model = model_name
+        print(f"\nTraining {args.model}...")
+
+        # Create trainer and start training
+        trainer = Trainer(args)
+        trainer.train()
+
 
 if __name__ == '__main__':
-    main()
+    train_all_models()
