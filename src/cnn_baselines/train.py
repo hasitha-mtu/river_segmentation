@@ -95,7 +95,7 @@ class Trainer:
         
         # Load checkpoint if resuming
         if args.resume:
-            self.load_checkpoint(args.resume)
+            self.load_checkpoint()
         
         print(f"Training on device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
@@ -103,10 +103,9 @@ class Trainer:
 
     def setup_directories(self):
         """Create necessary directories"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        exp_name = f"{self.args.model}_{self.args.loss}_{timestamp}"
-        
-        self.exp_dir = os.path.join(self.args.output_dir, exp_name)
+        exp_name = f"{self.args.model}_{self.args.loss}"
+        self.model_dir = os.path.join(self.args.output_dir, self.args.model)
+        self.exp_dir = os.path.join(self.model_dir, exp_name)
         self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
         self.log_dir = os.path.join(self.exp_dir, 'logs')
         
@@ -256,7 +255,8 @@ class Trainer:
             epoch_path = os.path.join(self.checkpoint_dir, f'epoch_{epoch}.pth')
             torch.save(checkpoint, epoch_path)
 
-    def load_checkpoint(self, checkpoint_path):
+    def load_checkpoint(self):
+        checkpoint_path = f"{self.checkpoint_dir}/latest.pth"
         """Load model checkpoint"""
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
