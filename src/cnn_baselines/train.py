@@ -7,7 +7,6 @@ import os
 import time
 import argparse
 import json
-from datetime import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -63,12 +62,26 @@ class Trainer:
         else:
             self.criterion = get_loss_function(args.loss)
         
-        # Setup optimizer
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=args.learning_rate,
-            weight_decay=args.weight_decay
-        )
+        # # Setup optimizer
+        # self.optimizer = torch.optim.Adam(
+        #     self.model.parameters(),
+        #     lr=args.learning_rate,
+        #     weight_decay=args.weight_decay
+        # )
+
+        if args.optimizer == 'adamw':
+                self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.learning_rate,
+                weight_decay=args.weight_decay,
+                betas=(0.9, 0.999)
+            )
+        elif args.optimizer == 'adam':
+                self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=args.learning_rate,
+                weight_decay=args.weight_decay
+            )
         
         # Setup scheduler
         if args.scheduler == 'cosine':
@@ -381,6 +394,9 @@ def parse_args():
     parser.add_argument('--scheduler', type=str, default='cosine',
                        choices=['cosine', 'step', 'none'],
                        help='Learning rate scheduler')
+    parser.add_argument('--optimizer', type=str, default='adam',
+                       choices=['adam', 'adamw'],
+                       help='Optimizer')
     
     # System parameters
     parser.add_argument('--num-workers', type=int, default=4,

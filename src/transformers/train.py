@@ -58,16 +58,49 @@ class Trainer:
         else:
             self.criterion = get_loss_function(args.loss)
         
-        # Setup optimizer (AdamW for transformers)
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=args.learning_rate,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.999)
-        )
+        # # Setup optimizer (AdamW for transformers)
+        # self.optimizer = torch.optim.AdamW(
+        #     self.model.parameters(),
+        #     lr=args.learning_rate,
+        #     weight_decay=args.weight_decay,
+        #     betas=(0.9, 0.999)
+        # )
+
+        # # Setup optimizer
+        # self.optimizer = torch.optim.Adam(
+        #     self.model.parameters(),
+        #     lr=args.learning_rate,
+        #     weight_decay=args.weight_decay
+        # )
+
+        if args.optimizer == 'adamw':
+                self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.learning_rate,
+                weight_decay=args.weight_decay,
+                betas=(0.9, 0.999)
+            )
+        elif args.optimizer == 'adam':
+                self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=args.learning_rate,
+                weight_decay=args.weight_decay
+            )
         
-        # Setup scheduler with warmup
-        self.setup_scheduler()
+        # # Setup scheduler with warmup
+        # self.setup_scheduler()
+
+        # Setup scheduler
+        if args.scheduler == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=args.epochs, eta_min=args.min_lr
+            )
+        elif args.scheduler == 'step':
+            self.scheduler = torch.optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=30, gamma=0.1
+            )
+        else:
+            self.scheduler = None
         
         # Setup metrics
         self.metrics = SegmentationMetrics(threshold=0.5)
@@ -367,6 +400,14 @@ def parse_args():
                        help='Save interval (default: 10)')
     parser.add_argument('--resume', type=str, default=None,
                        help='Resume from checkpoint')
+
+    # Optimizer & Scheduler
+    parser.add_argument('--scheduler', type=str, default='cosine',
+                       choices=['cosine', 'step', 'none'],
+                       help='Learning rate scheduler')
+    parser.add_argument('--optimizer', type=str, default='adam',
+                       choices=['adam', 'adamw'],
+                       help='Optimizer')
     
     return parser.parse_args()
 
