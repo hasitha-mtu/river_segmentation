@@ -351,7 +351,7 @@ def parse_args():
                        help='Training data split ratio')
     
     # Training parameters
-    parser.add_argument('--batch-size', type=int, default=8,
+    parser.add_argument('--batch-size', type=int, default=4,
                        help='Batch size')
     parser.add_argument('--epochs', type=int, default=100,
                        help='Number of training epochs')
