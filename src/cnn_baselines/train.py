@@ -360,8 +360,8 @@ def parse_args():
                        help='Root directory containing images/ and masks/')
     parser.add_argument('--image-size', type=int, default=512,
                        help='Input image size (default: 512)')
-    parser.add_argument('--train-split', type=float, default=0.8,
-                       help='Training data split ratio')
+    parser.add_argument('--train-split', type=float, default=0.9,
+                       help='Train/val split (default: 0.9)')
     
     # Training parameters
     parser.add_argument('--batch-size', type=int, default=4,

@@ -358,8 +358,8 @@ def parse_args():
                        help='Data root with images/ and masks/')
     parser.add_argument('--image-size', type=int, default=512,
                        help='Image size (default: 512)')
-    parser.add_argument('--train-split', type=float, default=0.8,
-                       help='Train/val split (default: 0.8)')
+    parser.add_argument('--train-split', type=float, default=0.9,
+                       help='Train/val split (default: 0.9)')
     
     # Training
     parser.add_argument('--batch-size', type=int, default=4,
