@@ -115,7 +115,7 @@ class Trainer:
         
         # Load checkpoint if resuming
         if args.resume:
-            self.load_checkpoint(args.resume)
+            self.load_checkpoint()
         
         print(f"\nConfiguration:")
         print(f"  Device: {self.device}")
@@ -145,22 +145,22 @@ class Trainer:
             )
 
     def setup_directories(self):
-        """Create experiment directories"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        exp_name = f"{self.args.model}_{self.args.loss}_{timestamp}"
-        
-        self.exp_dir = os.path.join(self.args.output_dir, exp_name)
+        """Create necessary directories"""
+        exp_name = f"{self.args.model}_{self.args.loss}"
+        self.model_dir = os.path.join(self.args.output_dir, self.args.model)
+        self.exp_dir = os.path.join(self.model_dir, exp_name)
         self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
         self.log_dir = os.path.join(self.exp_dir, 'logs')
         
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Save config
-        with open(os.path.join(self.exp_dir, 'config.json'), 'w') as f:
+        # Save configuration
+        config_path = os.path.join(self.exp_dir, 'config.json')
+        with open(config_path, 'w') as f:
             json.dump(vars(self.args), f, indent=4)
         
-        print(f"Experiment: {self.exp_dir}")
+        print(f"Experiment directory: {self.exp_dir}")
 
     def train_epoch(self, epoch):
         """Train one epoch"""
@@ -277,14 +277,32 @@ class Trainer:
         if epoch % self.args.save_interval == 0:
             torch.save(checkpoint, os.path.join(self.checkpoint_dir, f'epoch_{epoch}.pth'))
 
-    def load_checkpoint(self, path):
-        """Load checkpoint"""
-        print(f"Loading: {path}")
-        checkpoint = torch.load(path, map_location=self.device)
+    # def load_checkpoint(self, path):
+    #     """Load checkpoint"""
+    #     print(f"Loading: {path}")
+    #     checkpoint = torch.load(path, map_location=self.device)
+        
+    #     self.model.load_state_dict(checkpoint['model_state_dict'])
+    #     self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    #     self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+    #     self.start_epoch = checkpoint['epoch'] + 1
+    #     self.best_val_dice = checkpoint.get('best_val_dice', 0.0)
+    #     self.best_val_iou = checkpoint.get('best_val_iou', 0.0)
+        
+    #     print(f"Resumed from epoch {self.start_epoch}")
+
+    def load_checkpoint(self):
+        checkpoint_path = f"{self.checkpoint_dir}/latest.pth"
+        """Load model checkpoint"""
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        if self.scheduler and checkpoint['scheduler_state_dict']:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         
         self.start_epoch = checkpoint['epoch'] + 1
         self.best_val_dice = checkpoint.get('best_val_dice', 0.0)
@@ -425,6 +443,24 @@ def main():
     trainer = Trainer(args)
     trainer.train()
 
+def train_all_models():
+    args = parse_args()
+    
+
+    # Set random seeds
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+
+    model_names = ['segformer_b0', 'segformer_b2', 'swin_unet_tiny']
+    for model_name in model_names:
+        args.model = model_name
+        print(f"\nTraining {args.model}...")
+
+        # Create trainer and start training
+        trainer = Trainer(args)
+        trainer.train()
 
 if __name__ == '__main__':
-    main()
+    train_all_models()
