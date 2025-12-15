@@ -8,3 +8,7 @@ src/hybrid_sota/__pycache__/
 src/hybrid_sota/convnext_upernet/__pycache__/
 src/hybrid_sota/hrnet_ocr/__pycache__/
 
+src/foundation_models/__pycache__/
+src/foundation_models/dinov2/__pycache__/
+src/foundation_models/sam/__pycache__/
+
