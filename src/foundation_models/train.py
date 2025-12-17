@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 
 from models import get_model, get_model_varient
 from losses import get_loss_function
@@ -59,6 +59,12 @@ class Trainer:
             )
         else:
             self.criterion = get_loss_function(args.loss)
+        
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Initialize GradScaler for mixed precision
+        # ═══════════════════════════════════════════════════════════
+        self.scaler = GradScaler('cuda')
+        print("✓ Mixed precision enabled with GradScaler")
 
         if args.optimizer == 'adamw':
                 self.optimizer = torch.optim.AdamW(
@@ -151,6 +157,9 @@ class Trainer:
         """Train one epoch"""
         self.model.train()
         
+        # Clear cache at epoch start
+        torch.cuda.empty_cache()
+        
         total_loss = 0
         all_preds = []
         all_targets = []
@@ -174,14 +183,19 @@ class Trainer:
                     loss = self.criterion(outputs, masks)
                     loss_dict = {'total': loss.item()}
             
-            # Backward
-            loss.backward()
+            # ═══════════════════════════════════════════════════════════
+            # FIX: Use GradScaler for backward pass
+            # ═══════════════════════════════════════════════════════════
+            self.scaler.scale(loss).backward()
             
             # Gradient clipping
             if self.args.clip_grad > 0:
+                # Unscale gradients before clipping
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
             
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
             # Metrics
             total_loss += loss.item()
@@ -192,6 +206,10 @@ class Trainer:
                 all_targets.append(masks.cpu())
             
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
+            
+            # Clear cache periodically to avoid fragmentation
+            if batch_idx % 50 == 0 and batch_idx > 0:
+                torch.cuda.empty_cache()
             
             # Log batch
             if batch_idx % self.args.log_interval == 0:
@@ -251,6 +269,7 @@ class Trainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict(),  # FIX: Add scaler
             'best_val_dice': self.best_val_dice,
             'best_val_iou': self.best_val_iou,
             'args': vars(self.args)
@@ -280,6 +299,10 @@ class Trainer:
         
         if self.scheduler and checkpoint['scheduler_state_dict']:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # FIX: Load scaler state if available
+        if 'scaler_state_dict' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
         self.start_epoch = checkpoint['epoch'] + 1
         self.best_val_dice = checkpoint.get('best_val_dice', 0.0)
@@ -410,11 +433,18 @@ def parse_args():
 def main():
     args = parse_args()
     
+    # ═══════════════════════════════════════════════════════════
+    # FIX: Set memory allocator config to avoid fragmentation
+    # ═══════════════════════════════════════════════════════════
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
     # Set seeds
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
+        # Clear any cached memory
+        torch.cuda.empty_cache()
     
     # Train
     trainer = Trainer(args)
