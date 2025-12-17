@@ -19,7 +19,7 @@ from torch.amp import GradScaler
 from models import get_model, get_model_varient
 from losses import get_loss_function
 from dataset import get_dataloaders
-from metrics import SegmentationMetrics
+from metrics import StreamingMetrics  # Changed to StreamingMetrics for incremental updates
 
 
 class Trainer:
@@ -35,6 +35,16 @@ class Trainer:
         # Setup model
         print(f"Initializing {args.model}...")
         self.model = get_model(args.model, varient=args.varient).to(self.device)
+        
+        # ═══════════════════════════════════════════════════════════
+        # Enable gradient checkpointing if requested (saves ~40% memory)
+        # ═══════════════════════════════════════════════════════════
+        if args.gradient_checkpointing:
+            if hasattr(self.model, 'gradient_checkpointing_enable'):
+                self.model.gradient_checkpointing_enable()
+                print("✓ Gradient checkpointing enabled (saves ~40% memory)")
+            else:
+                print("⚠ Warning: Model doesn't support gradient_checkpointing_enable()")
         
         # Setup data
         print(f"Loading data from {args.data_root}...")
@@ -93,7 +103,7 @@ class Trainer:
             self.scheduler = None
         
         # Setup metrics
-        self.metrics = SegmentationMetrics(threshold=0.5)
+        self.metrics = StreamingMetrics(threshold=0.5)  # Uses incremental updates - no memory accumulation!
         
         # Setup logging
         self.writer = SummaryWriter(self.log_dir)
@@ -161,8 +171,12 @@ class Trainer:
         torch.cuda.empty_cache()
         
         total_loss = 0
-        all_preds = []
-        all_targets = []
+        
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Use incremental metrics (NO memory accumulation!)
+        # ═══════════════════════════════════════════════════════════
+        # Reset metrics for this epoch
+        self.metrics.reset()
         
         lr = self.optimizer.param_groups[0]['lr']
         pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}/{self.args.epochs} (LR: {lr:.2e})')
@@ -200,10 +214,12 @@ class Trainer:
             # Metrics
             total_loss += loss.item()
             
+            # ═══════════════════════════════════════════════════════════
+            # FIX: Update metrics incrementally (NO accumulation!)
+            # ═══════════════════════════════════════════════════════════
             with torch.no_grad():
                 preds = torch.sigmoid(outputs) > 0.5
-                all_preds.append(preds.cpu())
-                all_targets.append(masks.cpu())
+                self.metrics.update(preds, masks)  # Incremental update!
             
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
             
@@ -220,10 +236,10 @@ class Trainer:
                     for k, v in loss_dict.items():
                         self.writer.add_scalar(f'Train/batch_{k}', v, step)
         
-        # Epoch metrics
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-        metrics = self.metrics.compute_metrics(all_preds, all_targets)
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Compute final metrics (NO concatenation!)
+        # ═══════════════════════════════════════════════════════════
+        metrics = self.metrics.get_metrics()  # StreamingMetrics uses get_metrics()
         avg_loss = total_loss / len(self.train_loader)
         
         return avg_loss, metrics
@@ -233,9 +249,16 @@ class Trainer:
         """Validate"""
         self.model.eval()
         
+        # Clear cache before validation
+        torch.cuda.empty_cache()
+        
         total_loss = 0
-        all_preds = []
-        all_targets = []
+        
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Use incremental metrics (NO memory accumulation!)
+        # ═══════════════════════════════════════════════════════════
+        # Create separate metrics object for validation
+        val_metrics = StreamingMetrics(threshold=0.5)
         
         for batch in tqdm(self.val_loader, desc='Validation'):
             images = batch['image'].to(self.device)
@@ -251,13 +274,16 @@ class Trainer:
             
             total_loss += loss.item()
             
+            # ═══════════════════════════════════════════════════════════
+            # FIX: Update metrics incrementally (NO accumulation!)
+            # ═══════════════════════════════════════════════════════════
             preds = torch.sigmoid(outputs) > 0.5
-            all_preds.append(preds.cpu())
-            all_targets.append(masks.cpu())
+            val_metrics.update(preds, masks)  # Incremental update!
         
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-        metrics = self.metrics.compute_metrics(all_preds, all_targets)
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Compute final metrics (NO concatenation!)
+        # ═══════════════════════════════════════════════════════════
+        metrics = val_metrics.get_metrics()  # StreamingMetrics uses get_metrics()
         avg_loss = total_loss / len(self.val_loader)
         
         return avg_loss, metrics
@@ -374,8 +400,8 @@ def parse_args():
     # Data
     parser.add_argument('--data-root', type=str, required=True,
                        help='Data root with images/ and masks/')
-    parser.add_argument('--image-size', type=int, default=512,
-                       help='Image size (default: 512)')
+    parser.add_argument('--image-size', type=int, default=384,
+                       help='Image size (default: 384, saves memory vs 512)')
     parser.add_argument('--train-split', type=float, default=0.9,
                        help='Train/val split (default: 0.9)')
     
@@ -394,6 +420,8 @@ def parse_args():
                        help='Warmup epochs (default: 5)')
     parser.add_argument('--clip-grad', type=float, default=1.0,
                        help='Gradient clipping (default: 1.0)')
+    parser.add_argument('--gradient-checkpointing', action='store_true',
+                       help='Enable gradient checkpointing (saves ~40%% memory, 20%% slower)')
     
     # Loss
     parser.add_argument('--loss', type=str, default='combined',

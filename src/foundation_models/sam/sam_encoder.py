@@ -233,6 +233,50 @@ class SAMImageEncoder(nn.Module):
         
         self._init_weights()
     
+    def interpolate_pos_encoding(self, x: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        """
+        Interpolate position embeddings for arbitrary input size.
+        
+        Args:
+            x: Patch embeddings (B, N, D)
+            H, W: Input image height and width
+        
+        Returns:
+            Interpolated position embeddings (1, N, D)
+        """
+        N = x.shape[1]
+        if N == self.pos_embed.shape[1]:
+            return self.pos_embed
+        
+        # Calculate grid sizes
+        patch_pos_embed = self.pos_embed
+        dim = x.shape[-1]
+        
+        # Original grid size (from initialization)
+        orig_size = self.patch_embed.grid_size
+        
+        # Current grid size (from input)
+        h = H // self.patch_size
+        w = W // self.patch_size
+        
+        # Reshape position embeddings to 2D grid
+        patch_pos_embed = patch_pos_embed.reshape(
+            1, orig_size, orig_size, dim
+        ).permute(0, 3, 1, 2)  # (1, D, orig_size, orig_size)
+        
+        # Interpolate to current size
+        patch_pos_embed = F.interpolate(
+            patch_pos_embed,
+            size=(h, w),
+            mode='bicubic',
+            align_corners=False
+        )
+        
+        # Reshape back to sequence
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, h * w, dim)
+        
+        return patch_pos_embed
+    
     def _init_weights(self):
         """Initialize weights."""
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
@@ -267,8 +311,13 @@ class SAMImageEncoder(nn.Module):
         # Patch embedding
         x = self.patch_embed(x)  # (B, N, D)
         
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Interpolate position embedding if input size differs
+        # ═══════════════════════════════════════════════════════════
+        pos_embed = self.interpolate_pos_encoding(x, H, W)
+        
         # Add position embedding
-        x = x + self.pos_embed
+        x = x + pos_embed
         
         # Extract features at different depths
         features = []
@@ -280,12 +329,17 @@ class SAMImageEncoder(nn.Module):
         # Apply normalization
         features = [self.norm(f) for f in features]
         
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Calculate actual grid size from input, not initialization
+        # ═══════════════════════════════════════════════════════════
+        grid_h = H // self.patch_size
+        grid_w = W // self.patch_size
+        
         # Reshape to spatial format
-        grid_size = self.patch_embed.grid_size
         spatial_features = []
         for f in features:
             # (B, N, D) -> (B, D, H', W')
-            f = f.transpose(1, 2).reshape(B, self.embed_dim, grid_size, grid_size)
+            f = f.transpose(1, 2).reshape(B, self.embed_dim, grid_h, grid_w)
             spatial_features.append(f)
         
         # Project to output channels and create multi-scale pyramid
