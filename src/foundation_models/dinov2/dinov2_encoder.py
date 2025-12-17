@@ -236,6 +236,56 @@ class DINOv2Encoder(nn.Module):
         
         self._init_weights()
     
+    def interpolate_pos_encoding(self, x: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        """
+        Interpolate position embeddings for arbitrary input size.
+        Handles CLS token separately.
+        
+        Args:
+            x: Patch embeddings with CLS token (B, N+1, D)
+            H, W: Input image height and width
+        
+        Returns:
+            Interpolated position embeddings (1, N+1, D)
+        """
+        N = x.shape[1] - 1  # Exclude CLS token
+        if N == self.pos_embed.shape[1] - 1:
+            return self.pos_embed
+        
+        # Separate CLS token and patch embeddings
+        pos_embed_cls = self.pos_embed[:, :1, :]  # (1, 1, D)
+        pos_embed_patches = self.pos_embed[:, 1:, :]  # (1, N_orig, D)
+        
+        dim = x.shape[-1]
+        
+        # Original grid size (from initialization)
+        orig_size = self.patch_embed.grid_size
+        
+        # Current grid size (from input)
+        h = H // self.patch_size
+        w = W // self.patch_size
+        
+        # Reshape position embeddings to 2D grid
+        pos_embed_patches = pos_embed_patches.reshape(
+            1, orig_size, orig_size, dim
+        ).permute(0, 3, 1, 2)  # (1, D, orig_size, orig_size)
+        
+        # Interpolate to current size
+        pos_embed_patches = F.interpolate(
+            pos_embed_patches,
+            size=(h, w),
+            mode='bicubic',
+            align_corners=False
+        )
+        
+        # Reshape back to sequence
+        pos_embed_patches = pos_embed_patches.permute(0, 2, 3, 1).reshape(1, h * w, dim)
+        
+        # Concatenate CLS token back
+        pos_embed = torch.cat([pos_embed_cls, pos_embed_patches], dim=1)
+        
+        return pos_embed
+    
     def _init_weights(self):
         """Initialize weights."""
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
@@ -270,8 +320,13 @@ class DINOv2Encoder(nn.Module):
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)  # (B, N+1, D)
         
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Interpolate position embedding if input size differs
+        # ═══════════════════════════════════════════════════════════
+        pos_embed = self.interpolate_pos_encoding(x, H, W)
+        
         # Add position embedding
-        x = x + self.pos_embed
+        x = x + pos_embed
         
         # Extract features at different depths
         features = []
@@ -284,12 +339,17 @@ class DINOv2Encoder(nn.Module):
         # Apply normalization
         features = [self.norm(f) for f in features]
         
+        # ═══════════════════════════════════════════════════════════
+        # FIX: Calculate actual grid size from input, not initialization
+        # ═══════════════════════════════════════════════════════════
+        grid_h = H // self.patch_size
+        grid_w = W // self.patch_size
+        
         # Reshape to spatial format
-        grid_size = self.patch_embed.grid_size
         spatial_features = []
         for f in features:
             # (B, N, D) -> (B, D, H', W')
-            f = f.transpose(1, 2).reshape(B, self.embed_dim, grid_size, grid_size)
+            f = f.transpose(1, 2).reshape(B, self.embed_dim, grid_h, grid_w)
             spatial_features.append(f)
         
         # Project to output channels and create multi-scale pyramid
