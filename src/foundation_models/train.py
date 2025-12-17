@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 
 from models import get_model, get_model_varient
 from losses import get_loss_function
@@ -162,14 +164,15 @@ class Trainer:
             
             # Forward
             self.optimizer.zero_grad()
-            outputs = self.model(images)
-            
-            # Loss
-            if self.args.loss == 'combined':
-                loss, loss_dict = self.criterion(outputs, masks)
-            else:
-                loss = self.criterion(outputs, masks)
-                loss_dict = {'total': loss.item()}
+
+            with autocast(device_type='cuda', dtype=torch.float16):
+                outputs = self.model(images)
+                # Loss
+                if self.args.loss == 'combined':
+                    loss, loss_dict = self.criterion(outputs, masks)
+                else:
+                    loss = self.criterion(outputs, masks)
+                    loss_dict = {'total': loss.item()}
             
             # Backward
             loss.backward()
@@ -220,12 +223,13 @@ class Trainer:
             images = batch['image'].to(self.device)
             masks = batch['mask'].to(self.device)
             
-            outputs = self.model(images)
+            with autocast(device_type='cuda', dtype=torch.float16):
+                outputs = self.model(images)
             
-            if self.args.loss == 'combined':
-                loss, _ = self.criterion(outputs, masks)
-            else:
-                loss = self.criterion(outputs, masks)
+                if self.args.loss == 'combined':
+                    loss, _ = self.criterion(outputs, masks)
+                else:
+                    loss = self.criterion(outputs, masks)
             
             total_loss += loss.item()
             
