@@ -211,6 +211,10 @@ class Trainer:
             if batch_idx % self.args.log_interval == 0:
                 step = epoch * len(self.train_loader) + batch_idx
                 self.writer.add_scalar('Train/batch_loss', loss.item(), step)
+
+                if self.args.loss == 'combined':
+                    for k, v in loss_dict.items():
+                        self.writer.add_scalar(f'Train/batch_{k}', v, step)
         
         # Epoch metrics
         all_preds = torch.cat(all_preds, dim=0)

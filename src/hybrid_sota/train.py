@@ -180,13 +180,32 @@ class Trainer:
             # Forward
             self.optimizer.zero_grad()
             outputs = self.model(images)
-            
-            # Loss
-            if self.args.loss == 'combined':
-                loss, loss_dict = self.criterion(outputs, masks)
-            else:
-                loss = self.criterion(outputs, masks)
-                loss_dict = {'total': loss.item()}
+
+            main_out, aux_out = outputs if isinstance(outputs, tuple) else (outputs, None)
+            loss, loss_dict = self.criterion(main_out, masks, aux_out)
+
+            # if isinstance(outputs, tuple):
+            #     main_out, aux_out = outputs
+            #     # main_loss = self.criterion(main_out, masks)
+            #     # aux_loss = self.criterion(aux_out, masks)
+            #     # loss = main_loss + 0.4 * aux_loss  # 0.4 = auxiliary weight
+            #     # Loss
+            #     if self.args.loss == 'combined':
+            #         main_loss, loss_dict = self.criterion(main_out, masks)
+            #         aux_loss = self.criterion(aux_out, masks)
+            #         print(f'main_loss type: {type(main_loss)}')
+            #         print(f'aux_loss type: {type(aux_loss)}')
+            #         loss = main_loss + 0.4 * aux_loss  # 0.4 = auxiliary weight
+            #     else:
+            #         loss = self.criterion(outputs, masks)
+            #         loss_dict = {'total': loss.item()}
+            # else:
+            #     # Loss
+            #     if self.args.loss == 'combined':
+            #         loss, loss_dict = self.criterion(outputs, masks)
+            #     else:
+            #         loss = self.criterion(outputs, masks)
+            #         loss_dict = {'total': loss.item()}
             
             # Backward
             loss.backward()
@@ -201,7 +220,7 @@ class Trainer:
             total_loss += loss.item()
             
             with torch.no_grad():
-                preds = torch.sigmoid(outputs) > 0.5
+                preds = torch.sigmoid(main_out) > 0.5
                 all_preds.append(preds.cpu())
                 all_targets.append(masks.cpu())
             
@@ -211,6 +230,10 @@ class Trainer:
             if batch_idx % self.args.log_interval == 0:
                 step = epoch * len(self.train_loader) + batch_idx
                 self.writer.add_scalar('Train/batch_loss', loss.item(), step)
+
+                if self.args.loss == 'combined':
+                    for k, v in loss_dict.items():
+                        self.writer.add_scalar(f'Train/batch_{k}', v, step)
         
         # Epoch metrics
         all_preds = torch.cat(all_preds, dim=0)
@@ -463,4 +486,4 @@ def train_all_models():
         trainer.train()
 
 if __name__ == '__main__':
-    train_all_models()
+    main()
