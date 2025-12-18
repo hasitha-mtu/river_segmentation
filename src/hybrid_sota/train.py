@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from models import get_model
+from models import get_model, get_model_varient
 from losses import get_loss_function
 from dataset import get_dataloaders
 from metrics import SegmentationMetrics
@@ -32,7 +32,7 @@ class Trainer:
         
         # Setup model
         print(f"Initializing {args.model}...")
-        self.model = get_model(args.model).to(self.device)
+        self.model = get_model(args.model, args.varient).to(self.device)
         
         # Setup data
         print(f"Loading data from {args.data_root}...")
@@ -146,7 +146,7 @@ class Trainer:
 
     def setup_directories(self):
         """Create necessary directories"""
-        exp_name = f"{self.args.model}_{self.args.loss}"
+        exp_name = f"{self.args.model}_{self.args.varient}_{self.args.loss}"
         self.model_dir = os.path.join(self.args.output_dir, self.args.model)
         self.exp_dir = os.path.join(self.model_dir, exp_name)
         self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
@@ -476,14 +476,19 @@ def train_all_models():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
 
-    model_names = ['convnext_upernet', 'hrnet_ocr']
+    model_names = ['hrnet_ocr', 'convnext_upernet']
+
     for model_name in model_names:
         args.model = model_name
         print(f"\nTraining {args.model}...")
-
-        # Create trainer and start training
-        trainer = Trainer(args)
-        trainer.train()
+        varients = get_model_varient(model_name)
+        for varient in varients:
+            args.varient = varient
+            print(f'Model name: {model_name}')
+            print(f'Model varient: {varient}')
+            # Create trainer and start training
+            trainer = Trainer(args)
+            trainer.train()
 
 if __name__ == '__main__':
-    main()
+    train_all_models()

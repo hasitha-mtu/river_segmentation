@@ -7,7 +7,7 @@ import torch
 from convnext_upernet.model import build_convnext_upernet
 from hrnet_ocr.model import build_hrnet_ocr
 
-def get_model(model_name, n_channels=3, n_classes=1):
+def get_model(model_name, varient, n_channels=3, n_classes=1):
     """
     Factory function to get models
     
@@ -18,16 +18,22 @@ def get_model(model_name, n_channels=3, n_classes=1):
     """
     if model_name == 'convnext_upernet':
         return build_convnext_upernet(
-            variant='tiny', 
+            variant=varient, 
             in_channels=n_channels, 
             num_classes=n_classes)
     elif model_name == 'hrnet_ocr':
         return build_hrnet_ocr(
-            variant='w48', 
+            variant=varient, 
             in_channels=n_channels, 
             num_classes=n_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
+
+def get_model_varient(model_name):
+    if model_name == 'hrnet_ocr':
+        return  ['w48', 'w32', 'w18']
+    else:
+        return [ 'tiny', 'small', 'base' ]
 
 if __name__ == "__main__":
     # Test models
