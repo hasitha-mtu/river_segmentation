@@ -637,7 +637,7 @@ class DeepLabV3PlusCBAM(nn.Module):
 
 
 # ====================== Model Factory ======================
-def get_model(model_name, n_channels=3, n_classes=1, pretrained=True):
+def get_model(model_name, in_channels=3, num_classes=1, pretrained=True):
     """
     Factory function to get models by name
     
@@ -661,9 +661,9 @@ def get_model(model_name, n_channels=3, n_classes=1, pretrained=True):
     model_class = models[model_name.lower()]
     
     if 'deeplab' in model_name.lower():
-        return model_class(n_channels=n_channels, n_classes=n_classes, pretrained=pretrained)
+        return model_class(n_channels=in_channels, n_classes=num_classes, pretrained=pretrained)
     else:
-        return model_class(n_channels=n_channels, n_classes=n_classes)
+        return model_class(n_channels=in_channels, n_classes=num_classes)
 
 
 if __name__ == "__main__":

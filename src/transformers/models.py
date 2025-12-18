@@ -651,19 +651,17 @@ class SwinUNet(nn.Module):
         return x
 
 
-def get_model(model_name, num_classes=1):
+def get_model(model_name, variant='b0', num_classes=1):
     """
     Factory function to get models
     
     Args:
-        model_name: 'segformer_b0', 'segformer_b2', or 'swin_unet_tiny'
+        model_name: 'segformer', or 'swin_unet'
         num_classes: Number of output classes (1 for binary segmentation)
     """
-    if model_name == 'segformer_b0':
-        return SegFormer(variant='b0', num_classes=num_classes)
-    elif model_name == 'segformer_b2':
-        return SegFormer(variant='b2', num_classes=num_classes)
-    elif model_name == 'swin_unet_tiny':
+    if model_name == 'segformer':
+        return SegFormer(variant=variant, num_classes=num_classes)
+    elif model_name == 'swin_unet':
         return SwinUNet(num_classes=num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
