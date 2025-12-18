@@ -3,7 +3,6 @@ Transformer-based Segmentation Models for River Water Detection
 RGB Input Only - SAM, DINOv2
 """
 
-import torch
 from foundation_models.sam.model import build_sam_segmentation
 from foundation_models.dinov2.model import build_dinov2_segmentation
 from hybrid_sota.convnext_upernet.model import build_convnext_upernet
