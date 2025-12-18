@@ -3,11 +3,7 @@ Training Script for Transformer Models
 SegFormer-B0, SegFormer-B2, Swin-UNet-Tiny - RGB Only
 """
 
-# CRITICAL FIX #1: Set memory allocator BEFORE importing torch
-import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Async execution
-
+import workstation_fix
 import os
 import time
 import argparse
