@@ -1,4 +1,5 @@
 data/
+dataset/
 experiments/
 src/cnn_baselines/__pycache__/
 
