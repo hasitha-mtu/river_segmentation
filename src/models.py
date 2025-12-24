@@ -72,7 +72,7 @@ def get_model_varient(model_name):
     elif model_name == 'convnext_upernet':
         return ['tiny', 'small', 'base']
     elif model_name == 'hrnet_ocr':
-        return ['w48', 'w32', 'w18']
+        return ['w18', 'w32', 'w48']
     elif model_name == 'swin_unet':
         return ['tiny']
     elif model_name == 'segformer':
