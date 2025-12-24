@@ -146,7 +146,8 @@ class Trainer:
 
     def setup_directories(self):
         """Create necessary directories"""
-        exp_name = f"{self.args.model}_{self.args.loss}"
+        # exp_name = f"{self.args.model}_{self.args.loss}"
+        exp_name = f"{self.args.model}_{self.args.varient}_{self.args.loss}"
         self.model_dir = os.path.join(self.args.output_dir, self.args.model)
         self.exp_dir = os.path.join(self.model_dir, exp_name)
         self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
