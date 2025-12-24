@@ -57,6 +57,30 @@ def get_model(model_name, variant, n_channels=3, n_classes=1):
             num_classes=n_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
+    
+def get_model_varient(model_name):
+    """
+    Factory function to get models
+    
+    Args:
+        model_name: 'sam', or 'dinov2' or ...
+    """
+    if model_name == 'sam':
+        return ['vit_b', 'vit_l', 'vit_h']
+    elif model_name == 'dinov2':
+        return ['vit_s', 'vit_b', 'vit_l', 'vit_g']
+    elif model_name == 'convnext_upernet':
+        return ['tiny', 'small', 'base']
+    elif model_name == 'hrnet_ocr':
+        return ['w48', 'w32', 'w18']
+    elif model_name == 'swin_unet':
+        return ['tiny']
+    elif model_name == 'segformer':
+        return ['b0', 'b2']
+    elif model_name in ('unet', 'unetpp', 'resunetpp', 'deeplabv3plus', 'deeplabv3plus_cbam'):
+        return []
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
 
 if __name__ == "__main__":
     print("All models tested successfully!")

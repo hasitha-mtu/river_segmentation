@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from models import get_model
+from models import get_model, get_model_varient
 from losses import get_loss_function
 from dataset import get_dataloaders
 from metrics import SegmentationMetrics
@@ -371,9 +371,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train Transformer Models (RGB Only)')
     
     # Model
-    parser.add_argument('--model', type=str, default='segformer_b2',
-                       choices=['segformer_b0', 'segformer_b2', 'swin_unet_tiny'],
-                       help='Model: segformer_b0, segformer_b2, swin_unet_tiny')
+    parser.add_argument('--model', type=str, default='segformer',
+                       choices=['segformer', 'swin_unet'],
+                       help='Model: segformer, swin_unet')
     
     # Data
     parser.add_argument('--data-root', type=str, required=True,
@@ -457,14 +457,28 @@ def train_all_models():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
 
-    model_names = ['segformer_b0', 'segformer_b2', 'swin_unet_tiny']
+    # model_names = ['segformer_b0', 'segformer_b2', 'swin_unet_tiny']
+    # for model_name in model_names:
+    #     args.model = model_name
+    #     print(f"\nTraining {args.model}...")
+
+    #     # Create trainer and start training
+    #     trainer = Trainer(args)
+    #     trainer.train()
+
+    model_names = ['segformer',  'swin_unet']
+
     for model_name in model_names:
         args.model = model_name
         print(f"\nTraining {args.model}...")
-
-        # Create trainer and start training
-        trainer = Trainer(args)
-        trainer.train()
+        varients = get_model_varient(model_name)
+        for varient in varients:
+            args.varient = varient
+            print(f'Model name: {model_name}')
+            print(f'Model varient: {varient}')
+            # Create trainer and start training
+            trainer = Trainer(args)
+            trainer.train()
 
 if __name__ == '__main__':
     train_all_models()

@@ -666,6 +666,11 @@ def get_model(model_name, variant='b0', num_classes=1):
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
+def get_model_varient(model_name):
+    if model_name == 'segformer':
+        return  ['b0', 'b2']
+    else:
+        return [ 'tiny']
 
 if __name__ == "__main__":
     # Test models
