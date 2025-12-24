@@ -32,10 +32,7 @@ class Trainer:
         # Setup model (always 3 channels for RGB)
         print(f"Initializing {args.model} model...")
         self.model = get_model(
-            args.model,
-            n_channels=3,  # Always RGB input
-            n_classes=1,
-            pretrained=args.pretrained
+            args.model
         ).to(self.device)
         
         # Setup data
