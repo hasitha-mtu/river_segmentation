@@ -488,19 +488,28 @@ def train_all_models():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
 
-    model_names = ['sam', 'dinov2']
+    # model_names = ['sam', 'dinov2']
 
-    for model_name in model_names:
-        args.model = model_name
-        print(f"\nTraining {args.model}...")
-        varients = get_model_varient(model_name)
-        for varient in varients:
-            args.varient = varient
-            print(f'Model name: {model_name}')
-            print(f'Model varient: {varient}')
-            # Create trainer and start training
-            trainer = Trainer(args)
-            trainer.train()
+    # for model_name in model_names:
+    #     args.model = model_name
+    #     print(f"\nTraining {args.model}...")
+    #     varients = get_model_varient(model_name)
+    #     for varient in varients:
+    #         args.varient = varient
+    #         print(f'Model name: {model_name}')
+    #         print(f'Model varient: {varient}')
+    #         # Create trainer and start training
+    #         trainer = Trainer(args)
+    #         trainer.train()
+    model_name = 'dinov2'
+    varient = 'vit_g'
+    args.model = model_name
+    args.varient = varient
+    print(f'Model name: {model_name}')
+    print(f'Model varient: {varient}')
+    # Create trainer and start training
+    trainer = Trainer(args)
+    trainer.train()
 
 if __name__ == '__main__':
     train_all_models()
