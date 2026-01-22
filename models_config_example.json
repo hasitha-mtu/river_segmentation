@@ -1,0 +1,158 @@
+{
+  "models": [
+    {
+      "name": "U-Net",
+      "model_type": "unet",
+      "variant": null,
+      "checkpoint": "experiments/unet_combined/best.pth",
+      "description": "Standard U-Net architecture"
+    },
+    {
+      "name": "U-Net++", 
+      "model_type": "unetpp",
+      "variant": null,
+      "checkpoint": "experiments/unetpp_combined/best.pth",
+      "description": "Standard U-Net++ architecture"
+    },
+    {
+      "name": "ResU-Net++",
+      "model_type": "resunetpp",
+      "variant": null,
+      "checkpoint": "experiments/resunetpp_combined/best.pth",
+      "description": "Standard ResU-Net++ architecture"
+    },
+    {
+      "name": "DeepLabV3+",
+      "model_type": "deeplabv3plus",
+      "variant": null,
+      "checkpoint": "experiments/deeplabv3plus_combined/best.pth",
+      "description": "Standard DeepLabV3+ architecture"
+    },
+    {
+      "name": "DeepLabV3+",
+      "model_type": "deeplabv3plus_cbam",
+      "variant": null,
+      "checkpoint": "experiments/deeplabv3plus_cbam_combined/best.pth",
+      "description": "DeepLabV3+ with CBAM architecture"
+    },
+
+
+    {
+      "name": "Swin-UNet Tiny",
+      "model_type": "swin_unet",
+      "variant": "tiny",
+      "checkpoint": "experiments/swin_unet_tiny_combined/best.pth",
+      "description": "Swin Transformer-based U-Net"
+    },
+    {
+      "name": "SegFormer", 
+      "model_type": "segformer",
+      "variant": "b0",
+      "checkpoint": "experiments/segformer_b0_combined/best.pth",
+      "description": "SegFormer B0 varient"
+    },
+    {
+      "name": "SegFormer",
+      "model_type": "segformer",
+      "variant": "b2",
+      "checkpoint": "experiments/segformer_b2_combined/best.pth",
+      "description": "SegFormer B2 varient"
+    },
+
+
+     {
+      "name": "ConvNeXtUPerNet",
+      "model_type": "convnext_upernet",
+      "variant": "tiny",
+      "checkpoint": "experiments/convnext_upernet_tiny_combined/best.pth",
+      "description": "ConvNeXtUPerNet model tiny architecture"
+    },
+    {
+      "name": "ConvNeXtUPerNet",
+      "model_type": "convnext_upernet",
+      "variant": "small",
+      "checkpoint": "experiments/convnext_upernet_small_combined/best.pth",
+      "description": "ConvNeXtUPerNet model small architecture"
+    },
+    {
+      "name": "ConvNeXtUPerNet",
+      "model_type": "convnext_upernet",
+      "variant": "base",
+      "checkpoint": "experiments/convnext_upernet_base_combined/best.pth",
+      "description": "ConvNeXtUPerNet model base architecture"
+    },
+     {
+      "name": "HRNetOCR",
+      "model_type": "hrnet_ocr",
+      "variant": "w18",
+      "checkpoint": "experiments/hrnet_ocr_w18_combined/best.pth",
+      "description": "ConvNeXtUPerNet model w18 architecture"
+    },
+    {
+      "name": "HRNetOCR",
+      "model_type": "hrnet_ocr",
+      "variant": "w32",
+      "checkpoint": "experiments/hrnet_ocr_w32_combined/best.pth",
+      "description": "ConvNeXtUPerNet model w32 architecture"
+    },
+    {
+      "name": "HRNetOCR",
+      "model_type": "hrnet_ocr",
+      "variant": "w48",
+      "checkpoint": "experiments/hrnet_ocr_w48_combined/best.pth",
+      "description": "ConvNeXtUPerNet model w48 architecture"
+    },
+
+
+    {
+      "name": "SAM ViT-B",
+      "model_type": "sam",
+      "variant": "vit_b",
+      "checkpoint": "experiments/sam_vit_b_combined/best.pth",
+      "description": "Segment Anything Model with ViT-B encoder"
+    },
+    {
+      "name": "SAM ViT-L",
+      "model_type": "sam",
+      "variant": "vit_l",
+      "checkpoint": "experiments/sam_vit_l_combined/best.pth",
+      "description": "Segment Anything Model with ViT-L encoder"
+    },
+    {
+      "name": "SAM ViT-H",
+      "model_type": "sam",
+      "variant": "vit_h",
+      "checkpoint": "experiments/sam_vit_h_combined/best.pth",
+      "description": "Segment Anything Model with ViT-H encoder"
+    },
+
+    {
+      "name": "DINOv2 ViT-S",
+      "model_type": "dinov2", 
+      "variant": "vit_s",
+      "checkpoint": "experiments/dinov2_vit_s_combined//best.pth",
+      "description": "DINOv2 with ViT-S backbone"
+    },
+    {
+      "name": "DINOv2 ViT-B", 
+      "model_type": "dinov2", 
+      "variant": "vit_b",
+      "checkpoint": "experiments/dinov2_vit_b_combined//best.pth",
+      "description": "DINOv2 with ViT-B backbone"
+    },
+    {
+      "name": "DINOv2 ViT-L",
+      "model_type": "dinov2",
+      "variant": "vit_l",
+      "checkpoint": "experiments/dinov2_vit_l_combined//best.pth",
+      "description": "DINOv2 with ViT-L backbone"
+    },
+    {
+      "name": "DINOv2 ViT-G",
+      "model_type": "dinov2",
+      "variant": "vit_g",
+      "checkpoint": "experiments/dinov2_vit_g_combined//best.pth",
+      "description": "DINOv2 with ViT-G backbone"
+    }
+  ]
+}
