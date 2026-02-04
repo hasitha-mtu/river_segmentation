@@ -440,11 +440,61 @@ def create_patched_dataset(
 
 
 if __name__ == "__main__":
-    # Create the patched dataset
+    """
+    Configuration presets for different patch sizes:
+    
+    512x512 patches:
+      - stride=512 (no overlap): ~70 patches/image, ~6,300 total patches
+      - stride=256 (50% overlap): ~280 patches/image, ~25,000 total patches
+    
+    1024x1024 patches (RECOMMENDED for high-res details):
+      - stride=1024 (no overlap): ~15 patches/image, ~6,300 total patches
+      - stride=768 (25% overlap): ~24 patches/image, ~10,000 total patches ⭐
+      - stride=640 (37.5% overlap): ~35 patches/image, ~14,700 total patches
+      - stride=512 (50% overlap): ~54 patches/image, ~22,700 total patches
+    
+    For river segmentation under tree canopy, RECOMMENDED:
+      patch_size=1024, stride=768 (25% overlap)
+    
+    Rationale:
+      - Preserves fine details better than 512x512
+      - 25% overlap ensures boundary features are well-captured
+      - Balanced dataset size (~10k patches)
+      - Reasonable training time
+    """
+    
+    # OPTION 1: 512x512 patches (original)
+    # create_patched_dataset(
+    #     raw_path="dataset/raw",
+    #     output_path="dataset/processed_512",
+    #     patch_size=512,
+    #     stride=512,
+    #     buffer_size=10
+    # )
+    
+    # OPTION 2: 1024x1024 patches with 25% overlap (RECOMMENDED)
     create_patched_dataset(
         raw_path="dataset/raw",
-        output_path="dataset/processed",
-        patch_size=512,
-        stride=512,  # No overlap between patches
-        buffer_size=10  # Skip 10 images between train/val to prevent leakage
+        output_path="dataset/processed_1024",
+        patch_size=1024,
+        stride=768,  # 25% overlap - good balance
+        buffer_size=10
     )
+    
+    # OPTION 3: 1024x1024 patches with no overlap (faster training)
+    # create_patched_dataset(
+    #     raw_path="dataset/raw",
+    #     output_path="dataset/processed_1024_no_overlap",
+    #     patch_size=1024,
+    #     stride=1024,
+    #     buffer_size=10
+    # )
+    
+    # OPTION 4: 1024x1024 patches with 50% overlap (maximum data)
+    # create_patched_dataset(
+    #     raw_path="dataset/raw",
+    #     output_path="dataset/processed_1024_50overlap",
+    #     patch_size=1024,
+    #     stride=512,
+    #     buffer_size=10
+    # )

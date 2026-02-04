@@ -187,9 +187,14 @@ def print_split_details(metadata_path="dataset/processed/dataset_metadata.json")
 
 
 if __name__ == "__main__":
-    # Print metadata
-    print_split_details()
+    # # Print metadata
+    # print_split_details()
     
-    # Create visualization
-    print("\nGenerating visualization...")
-    visualize_splits()
+    # # Create visualization
+    # print("\nGenerating visualization...")
+    # visualize_splits()
+
+    
+    print_split_details("dataset/processed_1024/dataset_metadata.json")
+    visualize_splits("dataset/processed_1024/dataset_metadata.json", 
+                     "dataset/raw")
