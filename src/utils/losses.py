@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.ndimage import distance_transform_edt
 import numpy as np
+from typing import Optional, Tuple
 
 
 class DiceLoss(nn.Module):
@@ -119,7 +120,7 @@ class BoundaryLoss(nn.Module):
 class CombinedLoss(nn.Module):
     """Combined loss: BCE + Dice + Boundary"""
     def __init__(self, bce_weight=1.0, dice_weight=1.0, boundary_weight=1.0, 
-                 use_boundary=True):
+                 use_boundary=True, aux_weight: float = 0.4):
         super(CombinedLoss, self).__init__()
         self.bce_weight = bce_weight
         self.dice_weight = dice_weight
@@ -130,33 +131,100 @@ class CombinedLoss(nn.Module):
         self.dice = DiceLoss()
         if use_boundary:
             self.boundary = BoundaryLoss()
+        self.aux_weight = aux_weight
 
-    def forward(self, predictions, targets):
-        print(f'CombinedLoss|forward|predictions type: {type(predictions)}')
-        print(f'CombinedLoss|forward|predictions length: {len(predictions)}')
-        print(f'CombinedLoss|forward|predictions[0]: {predictions[0]}')
-        print(f'CombinedLoss|forward|predictions[1]: {predictions[1]}')
-        print(f'CombinedLoss|forward|targets type: {type(targets)}')
-        bce_loss = self.bce(predictions, targets)
-        dice_loss = self.dice(predictions, targets)
+    # def forward(self, predictions, targets):
+    #     print(f'CombinedLoss|forward|predictions type: {type(predictions)}')
+    #     print(f'CombinedLoss|forward|predictions length: {len(predictions)}')
+    #     print(f'CombinedLoss|forward|predictions[0]: {predictions[0]}')
+    #     print(f'CombinedLoss|forward|predictions[1]: {predictions[1]}')
+    #     print(f'CombinedLoss|forward|targets type: {type(targets)}')
+    #     bce_loss = self.bce(predictions, targets)
+    #     dice_loss = self.dice(predictions, targets)
         
-        total_loss = self.bce_weight * bce_loss + self.dice_weight * dice_loss
+    #     total_loss = self.bce_weight * bce_loss + self.dice_weight * dice_loss
         
+    #     if self.use_boundary:
+    #         boundary_loss = self.boundary(predictions, targets)
+    #         total_loss += self.boundary_weight * boundary_loss
+    #         return total_loss, {
+    #             'bce': bce_loss.item(),
+    #             'dice': dice_loss.item(),
+    #             'boundary': boundary_loss.item(),
+    #             'total': total_loss.item()
+    #         }
+    #     else:
+    #         return total_loss, {
+    #             'bce': bce_loss.item(),
+    #             'dice': dice_loss.item(),
+    #             'total': total_loss.item()
+    #         }
+    
+
+    def forward(
+            self,
+            predictions: torch.Tensor,
+            targets: torch.Tensor,
+            aux_predictions: Optional[torch.Tensor] = None
+        ) -> Tuple[torch.Tensor, dict]:
+        """
+        Compute combined loss with optional auxiliary supervision.
+        
+        Args:
+            predictions: (B, 1, H, W) - main predictions (logits)
+            targets: (B, 1, H, W) - ground truth binary masks
+            aux_predictions: (B, 1, H, W) - optional auxiliary predictions
+        
+        Returns:
+            Tuple of (total_loss, loss_dict)
+        """
+        loss_dict = {}
+        
+        # Compute main losses
+        bce = self.bce(predictions, targets)
+        dice = self.dice(predictions, targets)
+        
+        loss_dict['bce'] = bce.item()
+        loss_dict['dice'] = dice.item()
+        
+        # Combined main loss
+        total_loss = self.bce_weight * bce + self.dice_weight * dice
+        loss_dict['main'] = total_loss.item()
+        
+        # Add boundary loss if enabled
         if self.use_boundary:
-            boundary_loss = self.boundary(predictions, targets)
-            total_loss += self.boundary_weight * boundary_loss
-            return total_loss, {
-                'bce': bce_loss.item(),
-                'dice': dice_loss.item(),
-                'boundary': boundary_loss.item(),
-                'total': total_loss.item()
-            }
-        else:
-            return total_loss, {
-                'bce': bce_loss.item(),
-                'dice': dice_loss.item(),
-                'total': total_loss.item()
-            }
+            boundary = self.boundary(predictions, targets)
+            loss_dict['boundary'] = boundary.item()
+            total_loss += self.boundary_weight * boundary
+        
+        # Add auxiliary loss if provided
+        if aux_predictions is not None:
+            # Compute auxiliary losses
+            aux_bce = self.bce(aux_predictions, targets)
+            aux_dice = self.dice(aux_predictions, targets)
+            
+            loss_dict['aux_bce'] = aux_bce.item()
+            loss_dict['aux_dice'] = aux_dice.item()
+            
+            # Combined auxiliary loss
+            aux_loss = self.bce_weight * aux_bce + self.dice_weight * aux_dice
+            
+            # Add auxiliary boundary if enabled
+            if self.use_boundary:
+                aux_boundary = self.boundary(aux_predictions, targets)
+                loss_dict['aux_boundary'] = aux_boundary.item()
+                aux_loss += self.boundary_weight * aux_boundary
+            
+            loss_dict['aux'] = aux_loss.item()
+            loss_dict['aux_weight'] = self.aux_weight
+            
+            # Add weighted auxiliary to total
+            total_loss = total_loss + self.aux_weight * aux_loss
+        
+        loss_dict['total'] = total_loss.item()
+        
+        return total_loss, loss_dict
+
 
 
 class TverskyLoss(nn.Module):

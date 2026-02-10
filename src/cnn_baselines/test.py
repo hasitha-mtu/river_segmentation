@@ -17,7 +17,7 @@ from pathlib import Path
 
 from models import get_model
 from dataset import RiverSegmentationDataset
-from metrics import SegmentationMetrics, StreamingMetrics, print_metrics
+from utils.metrics import SegmentationMetrics, StreamingMetrics, print_metrics
 
 
 class Predictor:

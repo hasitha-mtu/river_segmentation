@@ -16,10 +16,10 @@ from tqdm import tqdm
 from torch.amp import autocast
 from torch.amp import GradScaler
 
-from models import get_model, get_model_varient
-from losses import get_loss_function
-from dataset import get_dataloaders
-from metrics import StreamingMetrics  # Changed to StreamingMetrics for incremental updates
+from src.cnn_baselines.models import get_model
+from src.utils.losses import get_loss_function
+from src.dataset.dataset_loader import get_training_dataloaders
+from src.utils.metrics import SegmentationMetrics
 
 
 class Trainer:
@@ -48,13 +48,10 @@ class Trainer:
         
         # Setup data
         print(f"Loading data from {args.data_root}...")
-        self.train_loader, self.val_loader = get_dataloaders(
-            data_root=args.data_root,
+        self.train_loader, self.val_loader = get_training_dataloaders(
+            args.data_root,
             batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            image_size=(args.image_size, args.image_size),
-            train_split=args.train_split,
-            seed=args.seed
+            num_workers=args.num_workers
         )
         
         # Setup loss
@@ -488,28 +485,19 @@ def train_all_models():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
 
-    # model_names = ['sam', 'dinov2']
+    model_names = ['sam', 'dinov2']
 
-    # for model_name in model_names:
-    #     args.model = model_name
-    #     print(f"\nTraining {args.model}...")
-    #     varients = get_model_varient(model_name)
-    #     for varient in varients:
-    #         args.varient = varient
-    #         print(f'Model name: {model_name}')
-    #         print(f'Model varient: {varient}')
-    #         # Create trainer and start training
-    #         trainer = Trainer(args)
-    #         trainer.train()
-    model_name = 'dinov2'
-    varient = 'vit_g'
-    args.model = model_name
-    args.varient = varient
-    print(f'Model name: {model_name}')
-    print(f'Model varient: {varient}')
-    # Create trainer and start training
-    trainer = Trainer(args)
-    trainer.train()
+    for model_name in model_names:
+        args.model = model_name
+        print(f"\nTraining {args.model}...")
+        varients = get_model_varient(model_name)
+        for varient in varients:
+            args.varient = varient
+            print(f'Model name: {model_name}')
+            print(f'Model varient: {varient}')
+            # Create trainer and start training
+            trainer = Trainer(args)
+            trainer.train()
 
 if __name__ == '__main__':
     train_all_models()

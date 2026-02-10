@@ -24,7 +24,7 @@ import seaborn as sns
 
 from models import get_model
 from dataset import RiverSegmentationDataset
-from metrics import StreamingMetrics
+from utils.metrics import StreamingMetrics
 
 
 class ModelComparator:

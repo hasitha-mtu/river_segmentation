@@ -18,7 +18,7 @@ from tqdm import tqdm
 from models import get_model, get_model_varient
 from losses import get_loss_function
 from dataset import get_dataloaders
-from metrics import SegmentationMetrics
+from utils.metrics import SegmentationMetrics
 
 
 class Trainer:

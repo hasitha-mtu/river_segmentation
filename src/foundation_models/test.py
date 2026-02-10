@@ -15,7 +15,7 @@ from pathlib import Path
 
 from models import get_model
 from dataset import RiverSegmentationDataset
-from metrics import SegmentationMetrics, print_metrics
+from utils.metrics import SegmentationMetrics, print_metrics
 
 
 class Evaluator:

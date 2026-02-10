@@ -221,12 +221,14 @@ class UnifiedTrainer:
             # Forward
             self.optimizer.zero_grad()
             outputs = self.model(images)
+
+            main_out, aux_out = outputs if isinstance(outputs, tuple) else (outputs, None)
             
             # Loss
             if self.config['loss']['type'] == 'combined':
-                loss, loss_dict = self.criterion(outputs, masks)
+                loss, loss_dict = self.criterion(main_out, masks, aux_out)
             else:
-                loss = self.criterion(outputs, masks)
+                loss = self.criterion(main_out, masks)
                 loss_dict = {'total': loss.item()}
             
             # Backward
@@ -243,7 +245,7 @@ class UnifiedTrainer:
             total_loss += loss.item()
             
             with torch.no_grad():
-                preds = torch.sigmoid(outputs) > 0.5
+                preds = torch.sigmoid(main_out) > 0.5
                 all_preds.append(preds.cpu())
                 all_targets.append(masks.cpu())
             
@@ -559,8 +561,16 @@ def main():
     # ===== CHOOSE TRAINING MODE =====
     
     # Option 1: Train a single model
-    config['model']['name'] = 'hrnet_ocr'
-    config['model']['variant'] = 'w18'
+    # config['model']['name'] = 'hrnet_ocr'
+    # config['model']['variant'] = 'w18'
+    # train_single_model(config)
+
+    # config['model']['name'] = 'sam'
+    # config['model']['variant'] = 'vit_b'
+    # train_single_model(config)
+
+    config['model']['name'] = 'dinov2'
+    config['model']['variant'] = 'vit_s'
     train_single_model(config)
     
     # Option 2: Train specific models

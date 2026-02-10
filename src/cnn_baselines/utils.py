@@ -7,7 +7,7 @@ import time
 import numpy as np
 from models import get_model
 from losses import get_loss_function
-from metrics import SegmentationMetrics
+from utils.metrics import SegmentationMetrics
 
 
 def test_model_architecture(model_name, input_size=(512, 512), n_channels=3, device='cuda'):

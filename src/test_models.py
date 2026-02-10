@@ -23,9 +23,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from models import get_model
-from dataset import RiverSegmentationDataset
-from metrics import StreamingMetrics
-from losses import get_loss_function
+from dataset.dataset_loader import SegmentationDataset, get_dataloaders
+from utils.metrics import StreamingMetrics
+from utils.losses import get_loss_function
 from improved_argparse import add_model_arguments, validate_args_post_parse
 
 
@@ -98,21 +98,11 @@ class ModelTester:
         return model
     
     def get_test_loader(self):
-        """Create test dataloader"""
-        # Create dataset
-        dataset = RiverSegmentationDataset(
-            data_root=self.args.test_data,
-            image_size=(self.args.image_size, self.args.image_size),
-            augment=False  # No augmentation for testing!
-        )
-        
-        # Create loader
-        loader = DataLoader(
-            dataset,
+        loader = get_dataloaders(
+            data_dir=self.args.test_data,
             batch_size=self.args.batch_size,
-            shuffle=False,  # Keep order for visualization
             num_workers=self.args.num_workers,
-            pin_memory=True
+            data_loader_type='test'
         )
         
         return loader

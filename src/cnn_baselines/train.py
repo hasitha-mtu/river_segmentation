@@ -13,10 +13,18 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from models import get_model
-from losses import get_loss_function
-from dataset import get_dataloaders
-from metrics import SegmentationMetrics
+from src.cnn_baselines.models import get_model
+from src.utils.losses import get_loss_function
+from src.dataset.dataset_loader import get_training_dataloaders
+from src.utils.metrics import SegmentationMetrics
+
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available")
 
 
 class Trainer:
@@ -36,14 +44,10 @@ class Trainer:
         ).to(self.device)
         
         # Setup data
-        print(f"Loading data from {args.data_root}...")
-        self.train_loader, self.val_loader = get_dataloaders(
-            data_root=args.data_root,
+        self.train_loader, self.val_loader = get_training_dataloaders(
+            args.data_root,
             batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            image_size=(args.image_size, args.image_size),
-            train_split=args.train_split,
-            seed=args.seed
+            num_workers=args.num_workers
         )
         
         # Setup loss
@@ -110,7 +114,6 @@ class Trainer:
         print(f"Training on device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
 
-
     def setup_directories(self):
         """Create necessary directories"""
         exp_name = f"{self.args.model}_{self.args.loss}"
@@ -137,11 +140,13 @@ class Trainer:
         all_predictions = []
         all_targets = []
         
-        pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}/{self.args.epochs}')
+        pbar = tqdm(self.train_loader, 
+                    desc=f'Epoch {epoch}/{self.args.epochs}', 
+                    leave=False)
         
-        for batch_idx, batch in enumerate(pbar):
-            images = batch['image'].to(self.device)
-            masks = batch['mask'].to(self.device)
+        for batch_idx, (images, masks) in enumerate(pbar):
+            images = images.to(self.device)
+            masks = masks.to(self.device)
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -206,9 +211,9 @@ class Trainer:
         
         pbar = tqdm(self.val_loader, desc='Validation')
         
-        for batch in pbar:
-            images = batch['image'].to(self.device)
-            masks = batch['mask'].to(self.device)
+        for images, masks in pbar:
+            images = images.to(self.device)
+            masks = masks.to(self.device)
             
             outputs = self.model(images)
             
