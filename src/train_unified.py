@@ -529,7 +529,7 @@ def main():
     
     # Data configuration
     config['data']['data_root'] = './dataset/processed_1024'
-    config['data']['image_size'] = 512
+    config['data']['image_size'] = 1024
     config['data']['train_split'] = 0.9
     
     # Training configuration
@@ -569,9 +569,9 @@ def main():
     # config['model']['variant'] = 'vit_b'
     # train_single_model(config)
 
-    config['model']['name'] = 'dinov2'
-    config['model']['variant'] = 'vit_s'
-    train_single_model(config)
+    # config['model']['name'] = 'dinov2'
+    # config['model']['variant'] = 'vit_s'
+    # train_single_model(config)
     
     # Option 2: Train specific models
     # models_to_train = [
@@ -585,8 +585,8 @@ def main():
     #     train_single_model(config)
     
     # Option 3: Train all models
-    # print(f'config : {config}')
-    # train_all_models(config)
+    print(f'config : {config}')
+    train_all_models(config)
 
 
 if __name__ == '__main__':
