@@ -883,7 +883,7 @@ def get_default_config():
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
-                'type'         : 'adamw',
+                'type'         : 'adam',
                 'learning_rate': 1e-4,
                 'weight_decay' : 0.01,
                 'momentum'     : 0.9,
