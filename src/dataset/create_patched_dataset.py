@@ -464,22 +464,22 @@ if __name__ == "__main__":
     """
     
     # OPTION 1: 512x512 patches (original)
-    # create_patched_dataset(
-    #     raw_path="dataset/raw",
-    #     output_path="dataset/processed_512",
-    #     patch_size=512,
-    #     stride=512,
-    #     buffer_size=10
-    # )
-    
-    # OPTION 2: 1024x1024 patches with 25% overlap (RECOMMENDED)
     create_patched_dataset(
         raw_path="dataset/raw",
-        output_path="dataset/processed_1024",
-        patch_size=1024,
-        stride=768,  # 25% overlap - good balance
+        output_path="dataset/processed_512",
+        patch_size=512,
+        stride=512,
         buffer_size=10
     )
+    
+    # OPTION 2: 1024x1024 patches with 25% overlap (RECOMMENDED)
+    # create_patched_dataset(
+    #     raw_path="dataset/raw",
+    #     output_path="dataset/processed_1024",
+    #     patch_size=1024,
+    #     stride=768,  # 25% overlap - good balance
+    #     buffer_size=10
+    # )
     
     # OPTION 3: 1024x1024 patches with no overlap (faster training)
     # create_patched_dataset(
