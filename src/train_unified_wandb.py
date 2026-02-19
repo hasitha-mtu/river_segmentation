@@ -912,7 +912,7 @@ def get_default_config():
         },
         'data': {
             # Standard mode
-            'data_root'    : './dataset/processed_512_patch',
+            'data_root'    : './dataset/processed_512_resized',
             'image_size'   : 512,
             'augment_train': True,
             # GlobalLocal mode (set when name='global_local')
