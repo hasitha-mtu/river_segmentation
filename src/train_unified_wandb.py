@@ -121,9 +121,14 @@ class GlobalLocalDataset(Dataset):
             transforms.ToTensor(),
             transforms.Normalize(mean=self.MEAN, std=self.STD),
         ])
+        # Mask transform: always produces [1, H, W] float tensor in [0, 1]
+        # - Resize with NEAREST to preserve hard label boundaries
+        # - ToTensor on an 'L'-mode PIL image gives shape [1, H, W], values [0.0, 1.0]
+        # - Lambda clamp handles edge cases where mask pixels are 0/255 or not perfectly binary
         self.mask_tf = transforms.Compose([
             transforms.Resize((image_size, image_size), interpolation=Image.NEAREST),
-            transforms.ToTensor(),
+            transforms.ToTensor(),                          # [1, H, W], values in [0, 1]
+            transforms.Lambda(lambda m: (m > 0.5).float()) # binarise: 0.0 or 1.0 only
         ])
 
     def __len__(self):
@@ -134,16 +139,28 @@ class GlobalLocalDataset(Dataset):
 
         local_img  = Image.open(local_img_path).convert('RGB')
         global_img = Image.open(global_img_path).convert('RGB')
-        mask       = Image.open(local_mask_path)  # local mask is the ground truth
+        mask       = Image.open(local_mask_path).convert('L')  # 'L' = grayscale → [1,H,W] after ToTensor
 
         # Consistent augmentation: apply the SAME geometric transform to all three
         if self.augment:
             local_img, global_img, mask = self._augment(local_img, global_img, mask)
 
+        mask_tensor = self.mask_tf(mask)
+
+        # Defensive shape check — catches regressions before they reach the loss
+        assert mask_tensor.shape[0] == 1, (
+            f"Mask must be single-channel [1,H,W], got {mask_tensor.shape}. "
+            f"Source: {local_mask_path}"
+        )
+        assert mask_tensor.shape[1:] == torch.Size([self.image_size, self.image_size]), (
+            f"Mask spatial size mismatch: expected [{self.image_size},{self.image_size}], "
+            f"got {list(mask_tensor.shape[1:])}"
+        )
+
         return {
             'local_image':  self.img_tf(local_img),
             'global_image': self.img_tf(global_img),
-            'mask':         self.mask_tf(mask),
+            'mask':         mask_tensor,
             # Keep paths for debugging
             'local_path':   str(local_img_path),
             'global_path':  str(global_img_path),
@@ -264,13 +281,33 @@ class UnifiedTrainer:
 
         # ── Model ─────────────────────────────────────────────────────────
         if self.is_global_local:
-            print('\nInitializing GlobalLocalWrapper (dual-branch)…')
             gl_cfg = config['model'].get('global_local', {})
+
+            # Global branch config — falls back to top-level model keys so
+            # existing single-model configs also work as the global branch.
+            global_name    = gl_cfg.get('global_model_name',
+                                        config['model'].get('name', 'unet'))
+            global_variant = gl_cfg.get('global_variant',
+                                        config['model'].get('variant', None))
+
+            # Local branch config — defaults to same as global (symmetric)
+            local_name    = gl_cfg.get('local_model_name',  None)
+            local_variant = gl_cfg.get('local_variant',     None)
+
+            print(f'\nInitializing GlobalLocalWrapper (dual-branch)…')
+            print(f'  Global : {global_name}' + (f' ({global_variant})' if global_variant else ''))
+            print(f'  Local  : {local_name or global_name}' +
+                  (f' ({local_variant or global_variant})' if (local_variant or global_variant) else ''))
+
             self.model = GlobalLocalWrapper(
-                num_classes     = config['model'].get('n_classes', 1),
-                encoder_name    = gl_cfg.get('encoder_name', 'resnet34'),
-                encoder_weights = gl_cfg.get('encoder_weights', 'imagenet'),
+                num_classes       = config['model'].get('n_classes', 1),
+                n_channels        = config['model'].get('n_channels', 3),
+                global_model_name = global_name,
+                global_variant    = global_variant,
+                local_model_name  = local_name,
+                local_variant     = local_variant,
             ).to(self.device)
+            print(f'  → {self.model.description()}')
         else:
             model_name = config['model']['name']
             variant    = config['model'].get('variant', None)
@@ -403,8 +440,13 @@ class UnifiedTrainer:
             f'img_{self.config["data"].get("image_size", 512)}',
         ]
         if self.is_global_local:
+            gl_cfg = self.config['model'].get('global_local', {})
             tags.append('dual_branch')
             tags.append('global_local')
+            tags.append(gl_cfg.get('global_model_name', 'unet'))
+            local = gl_cfg.get('local_model_name', None)
+            if local and local != gl_cfg.get('global_model_name'):
+                tags.append(f'local_{local}')  # only add tag when asymmetric
 
         wandb.init(
             project = self.config['logging'].get('wandb_project', 'river-segmentation'),
@@ -922,21 +964,145 @@ def get_default_config():
     }
 
 
-def get_global_local_config():
-    """Return a config pre-filled for GlobalLocal dual-branch training."""
+def get_global_local_config(
+    global_model_name: str = 'unet',
+    global_variant:    str = None,
+    local_model_name:  str = None,   # None → same as global (symmetric)
+    local_variant:     str = None,
+):
+    """
+    Return a config pre-filled for GlobalLocal dual-branch training.
+
+    Args:
+        global_model_name : Architecture for the global (resized) branch.
+        global_variant    : Variant for the global branch (e.g. 'b2', 'tiny').
+        local_model_name  : Architecture for the local (patch) branch.
+                            Defaults to global_model_name (symmetric pairing).
+        local_variant     : Variant for the local branch.
+
+    Examples:
+        # Symmetric — same model on both branches
+        cfg = get_global_local_config('segformer', 'b2')
+
+        # Asymmetric — heavyweight global, lightweight local
+        cfg = get_global_local_config(
+            global_model_name='convnext_upernet', global_variant='base',
+            local_model_name='unet',
+        )
+    """
     config = get_default_config()
-    config['model']['name'] = 'global_local'
+    config['model']['name']    = 'global_local'
+    config['model']['variant'] = global_variant   # shown in W&B run name
+
     config['model']['global_local'] = {
-        'encoder_name'        : 'resnet34',   # backbone for both branches
-        'encoder_weights'     : 'imagenet',
-        'fusion_lr_multiplier': 5.0,          # fusion head learns 5× faster
+        'global_model_name'   : global_model_name,
+        'global_variant'      : global_variant,
+        'local_model_name'    : local_model_name,   # None → symmetric
+        'local_variant'       : local_variant,
+        'fusion_lr_multiplier': 5.0,
     }
+
     config['data']['local_root']  = './dataset/processed_512_patch'
     config['data']['global_root'] = './dataset/processed_512_resized'
     config['data']['image_size']  = 512
     config['loss']['aux_weight']  = 0.4
-    config['training']['batch_size'] = 4      # each sample = 2 images, watch VRAM
+    config['training']['batch_size'] = 4   # 2 × 512² per step — monitor VRAM
     return config
+
+
+def train_all_global_local_models(base_config: dict, symmetric_only: bool = True):
+    """
+    Train GlobalLocalWrapper with every supported model architecture as branches.
+
+    Args:
+        base_config     : Base config dict (data paths, training hyper-params, etc.)
+        symmetric_only  : If True (default), both branches use the same architecture.
+                          If False, also trains a selection of asymmetric pairings.
+
+    Symmetric run matrix (one experiment per model/variant):
+        unet, unetpp, resunetpp, deeplabv3plus, deeplabv3plus_cbam,
+        segformer/b0, segformer/b2, swin_unet/tiny,
+        convnext_upernet/tiny … base, hrnet_ocr/w18 … w48,
+        sam/vit_b … vit_h, dinov2/vit_s … vit_g
+
+    Asymmetric pairings (added when symmetric_only=False):
+        convnext_upernet/base (global) + unet (local)
+        segformer/b2          (global) + unet (local)
+        dinov2/vit_b          (global) + unet (local)
+    """
+    # All models with their variants — same registry as train_all_models()
+    all_models = {
+        'unet'              : [None],
+        'unetpp'            : [None],
+        'resunetpp'         : [None],
+        'deeplabv3plus'     : [None],
+        'deeplabv3plus_cbam': [None],
+        'segformer'         : ['b0', 'b2'],
+        'swin_unet'         : ['tiny'],
+        'convnext_upernet'  : ['tiny', 'small', 'base'],
+        'hrnet_ocr'         : ['w18', 'w32', 'w48'],
+        'sam'               : ['vit_b', 'vit_l', 'vit_h'],
+        'dinov2'            : ['vit_s', 'vit_b', 'vit_l', 'vit_g'],
+    }
+
+    experiments = []
+
+    # ── Symmetric pairs ───────────────────────────────────────────────────────
+    for model_name, variants in all_models.items():
+        for variant in variants:
+            experiments.append({
+                'global_model_name': model_name,
+                'global_variant':    variant,
+                'local_model_name':  None,      # symmetric → mirrors global
+                'local_variant':     None,
+                'label':             f'gl_sym_{model_name}' +
+                                     (f'_{variant}' if variant else ''),
+            })
+
+    # ── Asymmetric pairs (heavyweight global + lightweight local) ─────────────
+    if not symmetric_only:
+        asymmetric_pairs = [
+            ('convnext_upernet', 'base', 'unet',     None),
+            ('segformer',        'b2',   'unet',     None),
+            ('dinov2',           'vit_b','unet',     None),
+            ('hrnet_ocr',        'w48',  'segformer','b0'),
+        ]
+        for g_name, g_var, l_name, l_var in asymmetric_pairs:
+            experiments.append({
+                'global_model_name': g_name,
+                'global_variant':    g_var,
+                'local_model_name':  l_name,
+                'local_variant':     l_var,
+                'label':             f'gl_asym_{g_name}_{g_var}__local_{l_name}',
+            })
+
+    # ── Run experiments ───────────────────────────────────────────────────────
+    for exp in experiments:
+        print(f'\n{"="*80}')
+        print(f'GlobalLocal experiment: {exp["label"]}')
+        print(f'{"="*80}\n')
+
+        cfg = get_global_local_config(
+            global_model_name = exp['global_model_name'],
+            global_variant    = exp['global_variant'],
+            local_model_name  = exp['local_model_name'],
+            local_variant     = exp['local_variant'],
+        )
+
+        # Inherit training hyper-params from base_config
+        for key in ['training', 'loss', 'logging', 'system']:
+            if key in base_config:
+                cfg[key] = {**cfg[key], **base_config[key]}
+
+        try:
+            train_single_model(cfg)
+        except Exception as e:
+            print(f'  [ERROR] {exp["label"]} failed: {e}')
+            print('  Skipping to next experiment…')
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc; gc.collect()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -993,29 +1159,46 @@ def train_all_models(base_config: dict):
 
 def main():
     # ── Option A: Single standard model ──────────────────────────────────────
-    config = get_default_config()
-    config['model']['name']    = 'unet'
-    config['model']['variant'] = None
-    config['data']['data_root'] = './dataset/processed_512_patch'
-    config['data']['image_size'] = 512
-    config['training']['batch_size'] = 4
-    config['training']['epochs']     = 100
-    config['logging']['use_wandb']   = True
+    # config = get_default_config()
+    # config['model']['name']    = 'unet'
+    # config['model']['variant'] = None
+    # config['data']['data_root'] = './dataset/processed_512_patch'
+    # config['data']['image_size'] = 512
+    # config['training']['batch_size'] = 4
+    # config['training']['epochs']     = 100
+    # config['logging']['use_wandb']   = True
     # train_single_model(config)
 
-    # ── Option B: GlobalLocal dual-branch (RECOMMENDED for river segmentation)
-    gl_config = get_global_local_config()
-    gl_config['training']['epochs']   = 100
-    gl_config['training']['batch_size'] = 4   # 2 × 512² per sample — check VRAM
-    gl_config['logging']['use_wandb'] = True
+    # ── Option B: GlobalLocal — symmetric (same arch on both branches) ────────
+    gl_config = get_global_local_config(
+        global_model_name = 'unet',   # ← change to any supported model
+        global_variant    = None,
+        # local_model_name / local_variant omitted → symmetric (mirrors global)
+    )
+    gl_config['training']['epochs']     = 100
+    gl_config['training']['batch_size'] = 4
+    gl_config['logging']['use_wandb']   = True
     gl_config['logging']['wandb_notes'] = (
         'GlobalLocal dual-branch: resized global context + sliced local detail. '
         'Attention-gated fusion. Deep supervision on both branches.'
     )
-    train_single_model(gl_config)
+    # train_single_model(gl_config)
 
-    # ── Option C: Train all standard models ───────────────────────────────────
-    # train_all_models(config)
+    # ── Option C: GlobalLocal — asymmetric (different arch per branch) ────────
+    # gl_asym = get_global_local_config(
+    #     global_model_name = 'convnext_upernet', global_variant = 'base',
+    #     local_model_name  = 'unet',             local_variant  = None,
+    # )
+    # train_single_model(gl_asym)
+
+    # ── Option D: All standard models ─────────────────────────────────────────
+    train_all_models(get_default_config())
+
+    # ── Option E: All GlobalLocal symmetric experiments ───────────────────────
+    # train_all_global_local_models(get_default_config(), symmetric_only=True)
+
+    # ── Option F: All GlobalLocal including asymmetric pairings ───────────────
+    # train_all_global_local_models(get_default_config(), symmetric_only=False)
 
 
 if __name__ == '__main__':
