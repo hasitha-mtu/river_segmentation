@@ -706,3 +706,12 @@ Before training:
 - [ ] Checked GPU memory
 
 Ready to train transformers! 🚀
+
+
+### After Training Evalute Models
+
+```bash
+python src/evaluate_models.py --experiments_dir ./experiments --data_root ./dataset/processed_512_resized --save_predictions --num_pred_samples 8
+
+```
+
