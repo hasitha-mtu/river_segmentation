@@ -1170,18 +1170,18 @@ def main():
     # train_single_model(config)
 
     # ── Option B: GlobalLocal — symmetric (same arch on both branches) ────────
-    gl_config = get_global_local_config(
-        global_model_name = 'unet',   # ← change to any supported model
-        global_variant    = None,
-        # local_model_name / local_variant omitted → symmetric (mirrors global)
-    )
-    gl_config['training']['epochs']     = 100
-    gl_config['training']['batch_size'] = 4
-    gl_config['logging']['use_wandb']   = True
-    gl_config['logging']['wandb_notes'] = (
-        'GlobalLocal dual-branch: resized global context + sliced local detail. '
-        'Attention-gated fusion. Deep supervision on both branches.'
-    )
+    # gl_config = get_global_local_config(
+    #     global_model_name = 'unet',   # ← change to any supported model
+    #     global_variant    = None,
+    #     # local_model_name / local_variant omitted → symmetric (mirrors global)
+    # )
+    # gl_config['training']['epochs']     = 100
+    # gl_config['training']['batch_size'] = 4
+    # gl_config['logging']['use_wandb']   = True
+    # gl_config['logging']['wandb_notes'] = (
+    #     'GlobalLocal dual-branch: resized global context + sliced local detail. '
+    #     'Attention-gated fusion. Deep supervision on both branches.'
+    # )
     # train_single_model(gl_config)
 
     # ── Option C: GlobalLocal — asymmetric (different arch per branch) ────────
