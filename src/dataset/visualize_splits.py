@@ -143,7 +143,7 @@ def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json",
     print("STATISTICS:")
     print(f"{'='*70}")
     for split, stats in metadata['splits'].items():
-        print(f"{split.capitalize():12s}: {stats['images']:3d} images → {stats['patches']:4d} patches")
+        print(f"{split.capitalize():12s}: {stats['images']:3d} images → {stats['outputs']:4d} outputs")
     
     plt.show()
 
@@ -169,21 +169,21 @@ def print_split_details(metadata_path="dataset/processed/dataset_metadata.json")
     
     print(f"\nSplit Statistics:")
     total_images = sum(s['images'] for s in metadata['splits'].values())
-    total_patches = sum(s['patches'] for s in metadata['splits'].values())
+    total_outputs = sum(s['outputs'] for s in metadata['splits'].values())
     
     for split, stats in metadata['splits'].items():
         img_pct = stats['images'] / total_images * 100
-        patch_pct = stats['patches'] / total_patches * 100
-        patches_per_img = stats['patches'] / stats['images'] if stats['images'] > 0 else 0
+        patch_pct = stats['outputs'] / total_outputs * 100
+        outputs_per_img = stats['outputs'] / stats['images'] if stats['images'] > 0 else 0
         
         print(f"\n  {split.capitalize()}:")
         print(f"    Images:  {stats['images']:3d} ({img_pct:5.1f}%)")
-        print(f"    Patches: {stats['patches']:4d} ({patch_pct:5.1f}%)")
-        print(f"    Patches per image: {patches_per_img:.1f}")
+        print(f"    Patches: {stats['outputs']:4d} ({patch_pct:5.1f}%)")
+        print(f"    Patches per image: {outputs_per_img:.1f}")
     
     print(f"\n  Total:")
     print(f"    Images:  {total_images}")
-    print(f"    Patches: {total_patches}")
+    print(f"    Patches: {total_outputs}")
 
 
 if __name__ == "__main__":
@@ -195,6 +195,6 @@ if __name__ == "__main__":
     # visualize_splits()
 
     
-    print_split_details("dataset/processed_1024/dataset_metadata.json")
-    visualize_splits("dataset/processed_1024/dataset_metadata.json", 
+    print_split_details("dataset/processed_512_resized/dataset_metadata.json")
+    visualize_splits("dataset/processed_512_resized/dataset_metadata.json", 
                      "dataset/raw")
