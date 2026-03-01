@@ -42,7 +42,7 @@ from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
 from wrapper import GlobalLocalWrapper
-
+from torchviz import make_dot
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dual Dataset
@@ -1201,5 +1201,33 @@ def main():
     # train_all_global_local_models(get_default_config(), symmetric_only=False)
 
 
+# if __name__ == '__main__':
+#     main()
+
 if __name__ == '__main__':
-    main()
+    all_models = {
+        # CNN baselines
+        'unet'           : [],
+        'unetpp'         : [],
+        'resunetpp'      : [],
+        'deeplabv3plus'  : [],
+        'deeplabv3plus_cbam': [],
+        # Transformers
+        'segformer'      : ['b0', 'b2'],
+        'swin_unet'      : ['tiny'],
+        # Hybrid SOTA
+        'convnext_upernet': ['tiny', 'small', 'base'],
+        'hrnet_ocr'      : ['w18', 'w32', 'w48'],
+        # Foundation models
+        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
+        'dinov2'         : ['vit_s', 'vit_b', 'vit_l', 'vit_g'],
+    }
+    x = torch.randn(2, 3, 512, 512)
+    config = get_default_config()
+    for model_name, variants in all_models.items():
+        for variant in (variants or [None]):
+            tag = f'{model_name}' + (f' - {variant}' if variant else '')
+            model = get_model(model_name, variant, n_channels=3, n_classes=1)
+            model.eval()
+            output = model(x)
+            make_dot(output, params=dict(model.named_parameters())).render(tag, format="png")
