@@ -106,6 +106,7 @@ try:
     import matplotlib.pyplot as plt
     import matplotlib.ticker as mticker
     MATPLOTLIB_AVAILABLE = True
+    plt.rcParams['font.family'] = 'serif'
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
     print("[WARN] matplotlib not found — figures will be skipped.")
@@ -594,7 +595,7 @@ def _plot_coverage_performance(
 
     ax.set_xlabel('Ground-truth water coverage bin', fontsize=11)
     ax.set_ylabel('Mean Dice (per bin)', fontsize=11)
-    ax.set_title('Coverage–Performance Gradient across Architecture Families', fontsize=13)
+    ax.set_title('Coverage–Performance Gradient across Architecture Families', y=-0.3, fontsize=13)
     ax.set_xticks(x)
     ax.set_xticklabels(bin_labels, rotation=30, ha='right', fontsize=9)
     ax.set_ylim(0, 1.0)
@@ -602,9 +603,10 @@ def _plot_coverage_performance(
     ax.legend(fontsize=9, loc='upper left')
     ax.grid(axis='y', linestyle=':', alpha=0.4)
 
-    fig.tight_layout()
+    # fig.tight_layout()
+    plt.subplots_adjust(hspace=0.3, wspace=0.2)
     out = output_dir / 'fig_coverage_performance.png'
-    fig.savefig(out, dpi=150, bbox_inches='tight')
+    fig.savefig(out, dpi=1000, bbox_inches='tight')
     plt.close(fig)
     print(f"  Saved figure: {out}")
 
