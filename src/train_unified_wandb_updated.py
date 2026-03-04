@@ -43,6 +43,7 @@ from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
 from wrapper import GlobalLocalWrapper
 from torchviz import make_dot
+import inspect
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dual Dataset
@@ -1264,6 +1265,66 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+
+    model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1)
+    print(inspect.getfile(type(model)))          # which model.py is loaded
+    print(inspect.getfile(type(model.encoder)))  # which encoder is loaded
+
+    # Confirm the LR multipliers are actually 10x
+    groups = model.get_params_groups(lr=1e-4)
+    for i, g in enumerate(groups):
+        print(f"group_{i}: lr={g['lr']}")
+
+    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
+    # model.train()
+
+    # x = torch.randn(2, 3, 512, 512).cuda()
+    # mask = torch.zeros(2, 1, 512, 512).cuda()
+    # mask[:, :, 100:150, 100:150] = 1.0  # fake water patch
+
+    # out = model(x)
+    # loss = torch.nn.functional.binary_cross_entropy_with_logits(out, mask)
+    # loss.backward()
+
+    # # Check 1: are backbone gradients actually computed?
+    # backbone_grad = model.encoder.backbone.blocks[0].attn.qkv.weight.grad
+    # decoder_grad  = model.decoder.seg_head[-1].weight.grad
+
+    # print(f"Backbone block[0] qkv grad : {backbone_grad}")
+    # print(f"Decoder head grad          : {decoder_grad}")
+
+    # # Check 2: gradient magnitudes
+    # if backbone_grad is not None:
+    #     print(f"Backbone grad norm : {backbone_grad.norm():.6f}")
+    # if decoder_grad is not None:
+    #     print(f"Decoder grad norm  : {decoder_grad.norm():.6f}")
+
+    # # Check 3: what does get_model actually return?
+    # print(f"\nModel type         : {type(model)}")
+    # print(f"Encoder type       : {type(model.encoder)}")
+    # print(f"Backbone type      : {type(model.encoder.backbone)}")
+
+    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1)
+
+    # # Check 1: is it actually pretrained?
+    # # A pretrained DINOv2 backbone has very specific weight statistics
+    # backbone_mean = model.encoder.backbone.patch_embed.proj.weight.data.mean().item()
+    # print(f"Backbone patch_embed mean: {backbone_mean:.6f}")
+    # # Pretrained: ~0.000xxx (small but structured)
+    # # Random init: ~0.0 (Xavier/kaiming centered exactly at 0)
+
+    # # Check 2: does it produce non-trivial output on a dummy input?
+    # x = torch.randn(2, 3, 512, 512)
+    # with torch.no_grad():
+    #     out = model(x)
+    #     probs = torch.sigmoid(out)
+    # print(f"Output prob range: {probs.min():.4f} – {probs.max():.4f}")
+    # # Pretrained + working decoder: wide spread, e.g. 0.1 – 0.9
+    # # Random init or broken: all ~0.5 (saturated) or very narrow range
+
+    # # Check 3: confirm no sigmoid in the model output path
+    # print(out.min().item(), out.max().item())
+
     # ── Option A: Single standard model ──────────────────────────────────────
     # config = get_default_config()
     # config['model']['name']    = 'unet'
