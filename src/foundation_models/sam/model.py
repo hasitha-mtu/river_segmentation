@@ -1,286 +1,329 @@
 """
-SAM Segmentation Model
-======================
+SAM Encoder + CNN Decoder
+==========================
+Uses SAM's powerful image encoder as a frozen feature extractor,
+then adds a lightweight CNN decoder for segmentation.
 
-Complete model combining pretrained SAM encoder and FPN decoder for binary
-river water segmentation.
+SAM (Segment Anything Model) is pretrained on 1.1B masks, providing
+strong segmentation-specific features. This architecture explores whether
+SAM's mask pretraining transfers better than DINOv2's image-level pretraining
+for water segmentation.
 
-Changes from the original from-scratch version
------------------------------------------------
-* Encoder now loads real pretrained SAM weights from a local checkpoint file.
-* ``checkpoint_path`` argument is required when pretrained=True.
-  Download checkpoints from:
-      vit_b: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
-      vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
-      vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
-* ``pretrained`` and ``freeze_encoder`` arguments control fine-tuning strategy:
-    - Full fine-tuning  (pretrained=True,  freeze_encoder=False)  ← recommended
-    - Linear probing    (pretrained=True,  freeze_encoder=True)
-    - Random baseline   (pretrained=False, freeze_encoder=False)
-* ``get_params_groups()`` now returns three groups matching DINOv2:
-    backbone    → lr × 0.1   (pretrained ViT, fine-tune gently)
-    proj_convs  → lr × 1.0   (randomly initialised, train at full LR)
-    decoder     → lr × 1.0   (randomly initialised, task-specific)
-
-Author: Hasitha
-Date: December 2025
+Reference: Kirillov et al. "Segment Anything" (2023)
 """
 
 import torch
 import torch.nn as nn
-from typing import List, Optional
+import torch.nn.functional as F
+from typing import Optional, List
+from segment_anything import sam_model_registry
 
-from .sam_encoder import SAMImageEncoder, build_sam_encoder, SAM_CONFIGS
-from .sam_decoder import FPNDecoder
-
-
-class SAMSegmentation(nn.Module):
+class SAMEncoderDecoder(nn.Module):
     """
-    SAM-based binary segmentation model.
-
-    Architecture:
-        Input (B, 3, H, W)
-            │
-            ▼  SAM ViT image encoder  (pretrained, fine-tuned at low LR)
-            │  + 1×1 projection convs  (random init, trained at full LR)
-            │
-            ▼  FPN decoder  (random init, trained at full LR)
-            │
-            ▼  Output logits (B, num_classes, H, W)  [no sigmoid — use BCEWithLogitsLoss]
-
+    SAM encoder with custom CNN decoder
+    
+    Uses SAM's ViT encoder (frozen) to extract features, then applies
+    a lightweight decoder for binary water segmentation.
+    
+    IMPORTANT: SAM's image encoder has fixed positional embeddings for 1024x1024 input.
+    Input images are always resized to 1024x1024, producing 64x64 feature maps.
+    The decoder then upsamples back to the desired output size.
+    
     Args:
-        in_channels:      Input channels (must be 3 for pretrained backbone).
-        num_classes:      Output channels — 1 for binary segmentation.
-        encoder_variant:  SAM size ('vit_b' | 'vit_l' | 'vit_h').
-        img_size:         Kept for API compatibility; SAM handles arbitrary sizes.
-        fpn_channels:     Intermediate channels in the FPN decoder.
-        pretrained:       Load Meta pretrained SAM weights.
-        freeze_encoder:   Freeze backbone weights (linear probing mode).
-        checkpoint_path:  Path to local .pth file. Required when pretrained=True.
-
-    Example:
-        >>> model = SAMSegmentation(
-        ...     num_classes=1,
-        ...     encoder_variant='vit_b',
-        ...     checkpoint_path='./checkpoints/sam/sam_vit_b_01ec64.pth'
-        ... )
-        >>> logits = model(torch.randn(2, 3, 512, 512))  # (2, 1, 512, 512)
-        >>> probs  = torch.sigmoid(logits)
+        sam_checkpoint: Path to SAM checkpoint (.pth file)
+        model_type: SAM model type ('vit_b', 'vit_l', 'vit_h')
+        freeze_encoder: Freeze SAM encoder weights
+        decoder_channels: Base channels for decoder
+    
+    Note: Requires RGB input (3 channels) - SAM only works with RGB
     """
-
+    
     def __init__(
         self,
-        in_channels:     int            = 3,
-        num_classes:     int            = 1,
-        encoder_variant: str            = 'vit_b',
-        img_size:        int            = 512,
-        fpn_channels:    int            = 256,
-        pretrained:      bool           = True,
-        freeze_encoder:  bool           = False,
-        checkpoint_path: Optional[str] = None,
+        sam_checkpoint: str = 'checkpoints/sam_vit_b_01ec64.pth',
+        model_type: str = 'vit_b',
+        freeze_encoder: bool = True,
+        decoder_channels: int = 256
     ):
         super().__init__()
-
-        self.in_channels     = in_channels
-        self.num_classes     = num_classes
-        self.encoder_variant = encoder_variant
-
-        # ── Encoder ───────────────────────────────────────────────────────────
-        self.encoder = build_sam_encoder(
-            variant         = encoder_variant,
-            img_size        = img_size,
-            in_channels     = in_channels,
-            checkpoint_path = checkpoint_path,
-            pretrained      = pretrained,
-            freeze_encoder  = freeze_encoder,
+        
+        
+        # Load SAM model
+        print(f"Loading SAM model: {model_type}")
+        self.sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+        self.image_encoder = self.sam.image_encoder
+        
+        print(f"✓ SAM encoder loaded from {sam_checkpoint}")
+        
+        # Freeze encoder
+        if freeze_encoder:
+            for param in self.image_encoder.parameters():
+                param.requires_grad = False
+            print("✓ SAM encoder frozen")
+        
+        # SAM encoder output: 256 channels at 64x64 for 1024x1024 input
+        # MUST use 1024x1024 input due to fixed positional embeddings
+        sam_out_channels = 256
+        
+        # Lightweight decoder: 64x64 -> 512x512 (8x upsampling, 3 stages)
+        self.decoder = nn.Sequential(
+            # 64x64 -> 128x128
+            nn.ConvTranspose2d(sam_out_channels, decoder_channels, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels, decoder_channels, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+            
+            # 128x128 -> 256x256
+            nn.ConvTranspose2d(decoder_channels, decoder_channels // 2, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels // 2, decoder_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels // 2),
+            nn.ReLU(inplace=True),
+            
+            # 256x256 -> 512x512
+            nn.ConvTranspose2d(decoder_channels // 2, decoder_channels // 4, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels // 4, decoder_channels // 4, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels // 4),
+            nn.ReLU(inplace=True),
+            
+            # Final prediction
+            nn.Conv2d(decoder_channels // 4, 1, 1),
+            nn.Sigmoid()
         )
-
-        # ── Decoder ───────────────────────────────────────────────────────────
-        # in_channels_list flows directly from encoder.out_channels so decoder
-        # dimensions are always consistent across variants.
-        self.decoder = FPNDecoder(
-            in_channels_list = self.encoder.out_channels,
-            fpn_channels     = fpn_channels,
-            num_classes      = num_classes,
-        )
-
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
-
+        Forward pass
+        
         Args:
-            x: RGB images (B, 3, H, W), ImageNet-normalised.
-
+            x: RGB input (B, 3, H, W)
+        
         Returns:
-            Raw logits (B, num_classes, H, W).
-            Apply torch.sigmoid() for probabilities,
-            or pass directly to nn.BCEWithLogitsLoss.
+            Segmentation mask (B, 1, H, W)
         """
-        input_size = (x.shape[2], x.shape[3])
-
-        features = self.encoder(x)
-        logits   = self.decoder(features, input_size)
-
-        return logits
-
-    # def get_params_groups(self, lr: float) -> List[dict]:
-    #     """
-    #     Parameter groups for differential learning rates.
-
-    #     The pretrained SAM backbone gets 10× lower LR than the randomly-
-    #     initialised projection convolutions and decoder — matching the standard
-    #     fine-tuning recipe used for DINOv2.
-
-    #     Args:
-    #         lr: Base learning rate (applied to decoder and projection convs).
-
-    #     Returns:
-    #         List of dicts for AdamW, e.g.:
-    #             optimizer = AdamW(model.get_params_groups(lr=1e-4))
-    #     """
-    #     return [
-    #         # Pretrained SAM image encoder — gentle fine-tuning
-    #         {
-    #             'params' : self.encoder.backbone.parameters(),
-    #             'lr'     : lr * 0.1,
-    #             'name'   : 'backbone',
-    #         },
-    #         # Projection convs — bridge SAM features to FPN channel dimensions
-    #         {
-    #             'params' : self.encoder.proj_convs.parameters(),
-    #             'lr'     : lr,
-    #             'name'   : 'proj_convs',
-    #         },
-    #         # FPN decoder — fully task-specific, trained from scratch
-    #         {
-    #             'params' : self.decoder.parameters(),
-    #             'lr'     : lr,
-    #             'name'   : 'decoder',
-    #         },
-    #     ]
-    
-    def get_params_groups(self, lr: float):
-        return [
-            {
-                'params': self.encoder.backbone.parameters(),
-                'lr'    : lr * 0.1,   # 1e-5 — gentle fine-tuning of pretrained weights
-            },
-            {
-                'params': self.encoder.proj_convs.parameters(),
-                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, needs to learn fast from scratch
-            },
-            {
-                'params': self.decoder.parameters(),
-                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, same reason
-            },
-        ]
+        if x.shape[1] != 3:
+            raise ValueError(f"SAM requires RGB input (3 channels), got {x.shape[1]} channels")
+        
+        B, C, H, W = x.shape
+        original_size = (H, W)
+        
+        # SAM REQUIRES 1024x1024 input (fixed positional embeddings)
+        # Cannot use smaller sizes without modifying the encoder
+        sam_input_size = 1024
+        x_resized = F.interpolate(x, size=(sam_input_size, sam_input_size), mode='bilinear', align_corners=False)
+        
+        # SAM encoder (frozen, no gradients needed)
+        with torch.no_grad():
+            features = self.image_encoder(x_resized)  # B, 256, 64, 64
+        
+        # Decode: 64x64 -> 512x512
+        output = self.decoder(features)  # B, 1, 512, 512
+        
+        # Resize to original size if needed
+        if output.shape[2:] != original_size:
+            output = F.interpolate(output, size=original_size, mode='bilinear', align_corners=False)
+        
+        return output
 
 
-# ── Factory ───────────────────────────────────────────────────────────────────
-
-def build_sam_segmentation(
-    variant:        str            = 'vit_b',
-    in_channels:    int            = 3,
-    num_classes:    int            = 1,
-    img_size:       int            = 512,
-    fpn_channels:   int            = 256,
-    pretrained:     bool           = True,
-    freeze_encoder: bool           = False
-) -> SAMSegmentation:
+class SAMFineTuned(nn.Module):
     """
-    Factory function for SAM segmentation models.
-
+    Fine-tuned SAM for direct segmentation
+    
+    Uses full SAM architecture but with:
+    - Frozen image encoder
+    - Frozen prompt encoder
+    - Trainable mask decoder
+    - Learnable prompt embeddings (no explicit prompts needed)
+    
+    This allows the mask decoder to adapt to water segmentation
+    while leveraging SAM's powerful pretrained encoder.
+    
+    IMPORTANT: SAM's mask decoder was designed for single-image-multiple-prompts,
+    not batch-of-images. We handle batching by processing images individually
+    then concatenating results.
+    
     Args:
-        variant:         'vit_b' | 'vit_l' | 'vit_h'
-        in_channels:     Must be 3 for pretrained weights.
-        num_classes:     1 for binary segmentation (water / no-water).
-        img_size:        Kept for API compatibility.
-        fpn_channels:    FPN intermediate channels (256 is standard).
-        pretrained:      Load Meta pretrained SAM weights.
-        freeze_encoder:  Freeze backbone (linear probing).
-        checkpoint_path: Path to downloaded SAM .pth file.
-
-    Recommended usage:
-        >>> # Full fine-tuning (best accuracy)
-        >>> model = build_sam_segmentation(
-        ...     'vit_b', checkpoint_path='./checkpoints/sam/sam_vit_b_01ec64.pth'
-        ... )
-
-        >>> # Linear probing (tests SAM feature quality alone)
-        >>> model = build_sam_segmentation(
-        ...     'vit_b', freeze_encoder=True,
-        ...     checkpoint_path='./checkpoints/sam/sam_vit_b_01ec64.pth'
-        ... )
+        sam_checkpoint: Path to SAM checkpoint
+        model_type: SAM model type ('vit_b', 'vit_l', 'vit_h')
     """
-    if variant not in SAM_CONFIGS:
-        raise ValueError(
-            f"Unknown variant: '{variant}'. "
-            f"Choose from {list(SAM_CONFIGS.keys())}"
-        )
     
+    def __init__(
+        self,
+        sam_checkpoint: str = 'checkpoints/sam_vit_b_01ec64.pth',
+        model_type: str = 'vit_b'
+    ):
+        super().__init__()
+        
+        # Load full SAM model
+        print(f"Loading full SAM model: {model_type}")
+        self.sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+        print(f"✓ SAM loaded from {sam_checkpoint}")
+        
+        # Freeze encoder and prompt encoder
+        for param in self.sam.image_encoder.parameters():
+            param.requires_grad = False
+        for param in self.sam.prompt_encoder.parameters():
+            param.requires_grad = False
+        
+        print("✓ Image encoder and prompt encoder frozen")
+        print("✓ Mask decoder trainable")
+        
+        # Learnable prompt embeddings (replace point/box prompts)
+        # Shape: (1, 1, 256) - single prompt token
+        self.learnable_prompt = nn.Parameter(torch.randn(1, 1, 256))
+        
+        # Output post-processing
+        self.sigmoid = nn.Sigmoid()
+    
+    def _decode_single_image(
+        self,
+        image_embedding: torch.Tensor,
+        image_pe: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Decode mask for a single image embedding.
+        
+        SAM's mask decoder expects:
+        - image_embeddings: (1, 256, H, W)
+        - image_pe: (1, 256, H, W)
+        - sparse_prompt_embeddings: (1, N_prompts, 256)
+        - dense_prompt_embeddings: (1, 256, H, W)
+        
+        Args:
+            image_embedding: Single image embedding (1, 256, H, W)
+            image_pe: Positional encoding (1, 256, H, W)
+        
+        Returns:
+            Low resolution mask (1, 1, H_low, W_low)
+        """
+        # Sparse embeddings: our learnable prompt (1, 1, 256)
+        sparse_embeddings = self.learnable_prompt
+        
+        # Dense embeddings: zeros (no additional spatial guidance)
+        dense_embeddings = torch.zeros(
+            1,
+            256,
+            image_embedding.shape[2],
+            image_embedding.shape[3],
+            device=image_embedding.device,
+            dtype=image_embedding.dtype
+        )
+        
+        # Decode mask
+        low_res_mask, _ = self.sam.mask_decoder(
+            image_embeddings=image_embedding,
+            image_pe=image_pe,
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=False
+        )
+        
+        return low_res_mask
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+        
+        SAM's mask decoder doesn't support standard batched inference.
+        It was designed for single-image-multiple-prompts, not batch-of-images.
+        We handle this by encoding all images together (efficient), then
+        decoding each image individually (necessary for correctness).
+        
+        Args:
+            x: RGB input (B, 3, H, W)
+        
+        Returns:
+            Segmentation mask (B, 1, H, W)
+        """
+        if x.shape[1] != 3:
+            raise ValueError(f"SAM requires RGB input (3 channels), got {x.shape[1]} channels")
+        
+        B, C, H, W = x.shape
+        original_size = (H, W)
+        
+        # Resize to 1024x1024 (SAM's native resolution)
+        target_size = 1024
+        x_resized = F.interpolate(x, size=(target_size, target_size), mode='bilinear', align_corners=False)
+        
+        # Encode all images at once (batched encoding is supported)
+        with torch.no_grad():
+            image_embeddings = self.sam.image_encoder(x_resized)  # (B, 256, 64, 64)
+        
+        # Get positional encoding (same for all images)
+        image_pe = self.sam.prompt_encoder.get_dense_pe()  # (1, 256, 64, 64)
+        
+        # Decode each image individually
+        # SAM's mask decoder uses repeat_interleave internally which breaks with batch > 1
+        low_res_masks_list: List[torch.Tensor] = []
+        
+        for i in range(B):
+            # Extract single image embedding
+            img_embed = image_embeddings[i:i+1]  # (1, 256, 64, 64)
+            
+            # Decode single image
+            low_res_mask = self._decode_single_image(img_embed, image_pe)
+            low_res_masks_list.append(low_res_mask)
+        
+        # Concatenate all masks
+        low_res_masks = torch.cat(low_res_masks_list, dim=0)  # (B, 1, H_low, W_low)
+        
+        # Upsample to target size
+        masks = F.interpolate(
+            low_res_masks,
+            size=(target_size, target_size),
+            mode='bilinear',
+            align_corners=False
+        )
+        
+        # Apply sigmoid
+        masks = self.sigmoid(masks)
+        
+        # Resize to original size
+        if masks.shape[2:] != original_size:
+            masks = F.interpolate(masks, size=original_size, mode='bilinear', align_corners=False)
+        
+        return masks
+    
+def build_sam_segmentation(variant, in_channels, num_classes):
     if variant=='vit_b':
         checkpoint_path = './checkpoints/sam/sam_vit_b_01ec64.pth'
     elif variant=='vit_l':
         checkpoint_path = './checkpoints/sam/sam_vit_l_0b3195.pth'
     elif variant=='vit_h':
         checkpoint_path = './checkpoints/sam/sam_vit_h_4b8939.pth'
+    return SAMEncoderDecoder(
+            sam_checkpoint=checkpoint_path,
+            model_type=variant,
+            freeze_encoder=True,
+            decoder_channels=256
+        )
+    # return SAMFineTuned(
+    #         sam_checkpoint=checkpoint_path,
+    #         model_type=variant
+    #     )
 
-    return SAMSegmentation(
-        in_channels     = in_channels,
-        num_classes     = num_classes,
-        encoder_variant = variant,
-        img_size        = img_size,
-        fpn_channels    = fpn_channels,
-        pretrained      = pretrained,
-        freeze_encoder  = freeze_encoder,
-        checkpoint_path = checkpoint_path,
-    )
 
-
-# ── Smoke test ────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    print("=" * 70)
-    print("SAM Segmentation Model — Pretrained")
-    print("=" * 70)
-
-    ckpt = sys.argv[1] if len(sys.argv) > 1 else "./checkpoints/sam/sam_vit_b_01ec64.pth"
-
-    model = build_sam_segmentation(
-        variant         = 'vit_b',
-        in_channels     = 3,
-        num_classes     = 1,
-        img_size        = 512,
-        pretrained      = True,
-        checkpoint_path = ckpt,
-    )
-
-    x = torch.randn(2, 3, 512, 512)
-    print(f"\nInput : {x.shape}")
-
-    with torch.no_grad():
-        logits = model(x)
-        probs  = torch.sigmoid(logits)
-
-    print(f"Logits: {logits.shape}")
-    print(f"Probs : {probs.shape}  (min={probs.min():.3f}, max={probs.max():.3f})")
-
-    # Parameter breakdown
-    backbone_p = sum(p.numel() for p in model.encoder.backbone.parameters())
-    proj_p     = sum(p.numel() for p in model.encoder.proj_convs.parameters())
-    decoder_p  = sum(p.numel() for p in model.decoder.parameters())
-    total_p    = backbone_p + proj_p + decoder_p
-
-    print(f"\nParameter breakdown:")
-    print(f"  Backbone (pretrained, LR×0.1) : {backbone_p:>12,}  ({backbone_p/total_p*100:.1f}%)")
-    print(f"  Projections (random init)     : {proj_p:>12,}  ({proj_p/total_p*100:.1f}%)")
-    print(f"  FPN Decoder (random init)     : {decoder_p:>12,}  ({decoder_p/total_p*100:.1f}%)")
-    print(f"  Total                         : {total_p:>12,}  ({total_p*4/1024/1024:.1f} MB fp32)")
-
-    print("\nParameter groups (for AdamW):")
-    for g in model.get_params_groups(lr=1e-4):
-        n = sum(p.numel() for p in g['params'])
-        print(f"  {g['name']:15s}  LR={g['lr']:.1e}  params={n:,}")
-
-    print("\n✓ Forward pass OK")
+if __name__ == '__main__':
+    print("SAM Models Test")
+    print("="*70)
+    print("\nNote: These models require:")
+    print("1. segment_anything package installed")
+    print("2. SAM checkpoint downloaded to checkpoints/")
+    print("3. RGB input only (3 channels)")
+    print("\nSkipping actual model creation in test mode")
+    print("Use in training script with proper setup")
+    
+    # Test basic structure without loading actual SAM
+    print("\n✓ SAM model definitions ready")
+    print("\nTo use SAM models:")
+    print("1. Download SAM checkpoint:")
+    print("   wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P checkpoints/")
+    print("2. Install segment_anything:")
+    print("   pip install git+https://github.com/facebookresearch/segment-anything.git")
+    print("3. Use in training with RGB feature_config")

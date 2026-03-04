@@ -1008,7 +1008,7 @@ def get_default_config():
             'bce_weight'    : 1.0,
             'dice_weight'   : 1.0,
             'boundary_weight': 1.0,
-            'use_boundary'  : True,
+            'use_boundary'  : False,
             'aux_weight'    : 0.4,  # GlobalLocal: weight for auxiliary branch losses
         },
         'logging': {
@@ -1227,7 +1227,7 @@ def train_all_models(base_config: dict):
 
     all_models = {
         # Foundation models
-        'dinov2'         : ['vit_s', 'vit_b', 'vit_l'],
+        # 'dinov2'         : ['vit_s', 'vit_b', 'vit_l'],
         'sam'            : ['vit_b', 'vit_l', 'vit_h'],
     }
 
@@ -1266,39 +1266,44 @@ def train_all_models(base_config: dict):
 
 def main():
 
-    model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
-    model.train()
+    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
+    # model.train()
 
-    mask = torch.zeros(2, 1, 512, 512).cuda()
-    mask[:, :, 100:200, 100:200] = 1.0   # fake water region ~4% of pixels
+    # mask = torch.zeros(2, 1, 512, 512).cuda()
+    # mask[:, :, 100:200, 100:200] = 1.0   # fake water region ~4% of pixels
 
-    # Check 1: output shape and type
-    x = torch.randn(2, 3, 512, 512).cuda()
-    out = model(x)
-    print(f"Output type  : {type(out)}")
-    print(f"Output shape : {out.shape if isinstance(out, torch.Tensor) else 'NOT A TENSOR'}")
+    # # Check 1: output shape and type
+    # x = torch.randn(2, 3, 512, 512).cuda()
+    # out = model(x)
+    # print(f"Output type  : {type(out)}")
+    # print(f"Output shape : {out.shape if isinstance(out, torch.Tensor) else 'NOT A TENSOR'}")
 
-    config = get_default_config()
-    loss_cfg = config['loss']
-    # Check 2: does the loss actually respond to different predictions?
-    criterion = get_loss_function(loss_cfg['type'],
-                bce_weight      = loss_cfg.get('bce_weight', 1.0),
-                dice_weight     = loss_cfg.get('dice_weight', 1.0),
-                boundary_weight = loss_cfg.get('boundary_weight', 1.0),
-                use_boundary    = loss_cfg.get('use_boundary', False),)  # your combined loss
-    with torch.no_grad():
-        pred_zero  = torch.zeros(2, 1, 512, 512).cuda()        # predicts nothing
-        pred_all   = torch.full((2, 1, 512, 512), 5.0).cuda()  # predicts everything
-        pred_exact = torch.zeros(2, 1, 512, 512).cuda()
-        pred_exact[:, :, 100:200, 100:200] = 5.0               # predicts exactly right
+    # config = get_default_config()
+    # loss_cfg = config['loss']
+    # # Check 2: does the loss actually respond to different predictions?
+    # criterion = get_loss_function(loss_cfg['type'],
+    #             bce_weight      = loss_cfg.get('bce_weight', 1.0),
+    #             dice_weight     = loss_cfg.get('dice_weight', 1.0),
+    #             boundary_weight = loss_cfg.get('boundary_weight', 1.0),
+    #             use_boundary    = loss_cfg.get('use_boundary', False),)  # your combined loss
+    # with torch.no_grad():
+    #     pred_zero  = torch.zeros(2, 1, 512, 512).cuda()        # predicts nothing
+    #     pred_all   = torch.full((2, 1, 512, 512), 5.0).cuda()  # predicts everything
+    #     pred_exact = torch.zeros(2, 1, 512, 512).cuda()
+    #     pred_exact[:, :, 100:200, 100:200] = 5.0               # predicts exactly right
 
-        l0 = criterion(pred_zero,  mask, None)
-        l1 = criterion(pred_all,   mask, None)
-        l2 = criterion(pred_exact, mask, None)
+    #     l0 = criterion(pred_zero,  mask, None)
+    #     l1 = criterion(pred_all,   mask, None)
+    #     l2 = criterion(pred_exact, mask, None)
 
-    print(f"Loss (predict nothing) : {l0[0].item():.4f}")
-    print(f"Loss (predict all)     : {l1[0].item():.4f}")
-    print(f"Loss (predict exactly) : {l2[0].item():.4f}")
+    #     # l0, d0 = criterion(pred_zero,  mask, None)
+    #     # l1, d1 = criterion(pred_exact, mask, None)
+    #     # print("Loss breakdown (predict nothing):", d0)
+    #     # print("Loss breakdown (predict exactly):", d1)
+
+    # print(f"Loss (predict nothing) : {l0[0].item():.4f}")
+    # print(f"Loss (predict all)     : {l1[0].item():.4f}")
+    # print(f"Loss (predict exactly) : {l2[0].item():.4f}")
 
     # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
     # model.train()
