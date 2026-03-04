@@ -1182,8 +1182,8 @@ def train_all_models(base_config: dict):
 
     all_models = {
         # Foundation models
-        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
         'dinov2'         : ['vit_s', 'vit_b', 'vit_l'],
+        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
     }
 
     for model_name, variants in all_models.items():
