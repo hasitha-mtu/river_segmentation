@@ -2,441 +2,281 @@
 DINOv2 Encoder for Semantic Segmentation
 =========================================
 
-Vision Transformer backbone trained with DINOv2 self-supervised learning.
+Wraps Meta's pretrained DINOv2 ViT backbone and extracts multi-scale spatial
+features suitable for the FPNDecoder.
+
+Key difference from the previous from-scratch version
+------------------------------------------------------
+This module loads REAL pretrained DINOv2 weights (trained by Meta on 142M images
+with self-supervised DINO + iBOT objectives).  The previous version initialised
+all weights randomly and therefore had none of the representation quality that
+makes DINOv2 a "foundation model".
+
+How feature extraction works
+-----------------------------
+Meta's DINOv2 exposes ``get_intermediate_layers(x, blocks, return_class_token)``.
+We tap the transformer at four evenly-spaced block indices to obtain features at
+different semantic levels (shallow = fine detail, deep = high semantics), then:
+  1. Remove the CLS token  →  patch-token sequence  (B, N, D)
+  2. Reshape to 2D spatial grid  →  (B, D, H/14, W/14)
+  3. Project channels via 1×1 conv  →  (B, out_ch[i], H/14, W/14)
+  4. Bilinear resize to mimic stride-{4,8,16,32} pyramid for the FPN decoder
 
 Author: Hasitha
 Date: December 2025
 """
 
+import math
+from typing import List, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Optional
-import math
 
 
-class PatchEmbed(nn.Module):
-    """2D Image to Patch Embedding."""
-    def __init__(
-        self,
-        img_size: int = 518,
-        patch_size: int = 14,
-        in_channels: int = 3,
-        embed_dim: int = 768
-    ):
-        super().__init__()
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.grid_size = img_size // patch_size
-        self.num_patches = self.grid_size * self.grid_size
-        
-        self.proj = nn.Conv2d(
-            in_channels, embed_dim,
-            kernel_size=patch_size, stride=patch_size
-        )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, C, H, W = x.shape
-        x = self.proj(x)  # (B, D, H/P, W/P)
-        x = x.flatten(2).transpose(1, 2)  # (B, N, D)
-        return x
+# ── Variant configuration ─────────────────────────────────────────────────────
+
+DINOV2_CONFIGS = {
+    # variant : (hub_name,        embed_dim, depth, out_channels)
+    'vit_s': ('dinov2_vits14',  384,  12, [48,  96,  192,  384]),
+    'vit_b': ('dinov2_vitb14',  768,  12, [96,  192, 384,  768]),
+    'vit_l': ('dinov2_vitl14', 1024,  24, [128, 256, 512, 1024]),
+    'vit_g': ('dinov2_vitg14', 1536,  40, [192, 384, 768, 1536]),
+}
+
+PATCH_SIZE = 14   # DINOv2 always uses 14×14 patches
 
 
-class Attention(nn.Module):
-    """Multi-head self-attention."""
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        qkv_bias: bool = False,
-        attn_drop: float = 0.,
-        proj_drop: float = 0.
-    ):
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
-        
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-
-class MLP(nn.Module):
-    """MLP block."""
-    def __init__(
-        self,
-        in_features: int,
-        hidden_features: Optional[int] = None,
-        out_features: Optional[int] = None,
-        act_layer=nn.GELU,
-        drop: float = 0.
-    ):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
-
-
-class LayerScale(nn.Module):
-    """Layer scale module for better training dynamics."""
-    def __init__(self, dim: int, init_values: float = 1e-5):
-        super().__init__()
-        self.gamma = nn.Parameter(init_values * torch.ones(dim))
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.gamma * x
-
-
-class Block(nn.Module):
-    """
-    Transformer block with LayerScale.
-    
-    Args:
-        dim: Input dimension
-        num_heads: Number of attention heads
-        mlp_ratio: MLP hidden dim ratio
-        qkv_bias: Use bias in qkv
-        drop: Dropout rate
-        attn_drop: Attention dropout
-        init_values: LayerScale init value
-    """
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int,
-        mlp_ratio: float = 4.,
-        qkv_bias: bool = False,
-        drop: float = 0.,
-        attn_drop: float = 0.,
-        init_values: float = 1e-5
-    ):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias,
-            attn_drop=attn_drop, proj_drop=drop
-        )
-        self.ls1 = LayerScale(dim, init_values=init_values)
-        
-        self.norm2 = nn.LayerNorm(dim)
-        self.mlp = MLP(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            drop=drop
-        )
-        self.ls2 = LayerScale(dim, init_values=init_values)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.ls1(self.attn(self.norm1(x)))
-        x = x + self.ls2(self.mlp(self.norm2(x)))
-        return x
-
+# ── Encoder ───────────────────────────────────────────────────────────────────
 
 class DINOv2Encoder(nn.Module):
     """
-    DINOv2 Vision Transformer encoder.
-    
-    Self-supervised vision transformer with strong representation learning.
-    
+    Pretrained DINOv2 encoder with multi-scale FPN-ready feature outputs.
+
     Args:
-        img_size: Input image size
-        patch_size: Patch size
-        in_channels: Input channels
-        embed_dim: Embedding dimension
-        depth: Number of transformer blocks
-        num_heads: Number of attention heads
-        mlp_ratio: MLP expansion ratio
-        out_channels: Output channels for multi-scale features
+        variant:       DINOv2 size — 'vit_s' | 'vit_b' | 'vit_l' | 'vit_g'
+        in_channels:   Number of input image channels (must be 3 for pretrained)
+        pretrained:    Load Meta pretrained weights via torch.hub (recommended: True)
+        freeze_encoder: Freeze all encoder weights (useful for linear probing)
+
+    Attributes:
+        out_channels:  List of output channels per scale, used by FPNDecoder
     """
+
     def __init__(
         self,
-        img_size: int = 518,
-        patch_size: int = 14,
-        in_channels: int = 3,
-        embed_dim: int = 768,
-        depth: int = 12,
-        num_heads: int = 12,
-        mlp_ratio: float = 4.,
-        out_channels: List[int] = [96, 192, 384, 768]
+        variant:        str  = 'vit_b',
+        in_channels:    int  = 3,
+        pretrained:     bool = True,
+        freeze_encoder: bool = False,
     ):
         super().__init__()
-        
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.embed_dim = embed_dim
-        self.out_channels = out_channels
-        
-        # Patch embedding
-        self.patch_embed = PatchEmbed(
-            img_size=img_size,
-            patch_size=patch_size,
-            in_channels=in_channels,
-            embed_dim=embed_dim
-        )
-        
-        num_patches = self.patch_embed.num_patches
-        
-        # CLS token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        
-        # Position embedding (with CLS token)
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches + 1, embed_dim)
-        )
-        
-        # Transformer blocks
-        self.blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=True
+
+        if variant not in DINOV2_CONFIGS:
+            raise ValueError(
+                f"Unknown variant '{variant}'. "
+                f"Choose from {list(DINOV2_CONFIGS.keys())}"
             )
-            for _ in range(depth)
-        ])
-        
-        self.norm = nn.LayerNorm(embed_dim)
-        
-        # Extract features at different depths
-        self.extract_layers = [depth // 4, depth // 2, depth * 3 // 4, depth - 1]
-        
-        # Project to output channels
-        self.fpn_convs = nn.ModuleList([
-            nn.Conv2d(embed_dim, out_ch, kernel_size=1)
+        if in_channels != 3:
+            raise ValueError(
+                "Pretrained DINOv2 expects 3-channel RGB input. "
+                f"Got in_channels={in_channels}. "
+                "If you need single-channel input, convert to 3-channel first."
+            )
+
+        hub_name, embed_dim, depth, out_channels = DINOV2_CONFIGS[variant]
+
+        self.variant      = variant
+        self.embed_dim    = embed_dim
+        self.depth        = depth
+        self.out_channels = out_channels   # consumed by FPNDecoder
+
+        # ── Block indices at which we tap intermediate features ────────────────
+        # Four evenly-spaced taps: ~25%, 50%, 75%, 100% depth
+        # These are 0-indexed block numbers passed to get_intermediate_layers()
+        self.extract_indices: List[int] = [
+            depth // 4 - 1,
+            depth // 2 - 1,
+            depth * 3 // 4 - 1,
+            depth - 1,
+        ]
+
+        # ── Load pretrained backbone ──────────────────────────────────────────
+        if pretrained:
+            print(f"  [DINOv2Encoder] Loading pretrained '{hub_name}' from torch.hub …")
+            try:
+                self.backbone = torch.hub.load(
+                    'facebookresearch/dinov2',
+                    hub_name,
+                    pretrained=True,
+                )
+                print(f"  [DINOv2Encoder] Pretrained weights loaded ✓")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to load pretrained DINOv2 '{hub_name}' from torch.hub.\n"
+                    f"Ensure you have internet access and the facebookresearch/dinov2 "
+                    f"repo is accessible.\n"
+                    f"Original error: {e}"
+                ) from e
+        else:
+            # Random-init backbone — only useful for architecture testing
+            print(f"  [DINOv2Encoder] WARNING: loading '{hub_name}' WITHOUT pretrained "
+                  f"weights. Features will be meaningless.")
+            self.backbone = torch.hub.load(
+                'facebookresearch/dinov2',
+                hub_name,
+                pretrained=False,
+            )
+
+        # ── Optionally freeze backbone ─────────────────────────────────────────
+        if freeze_encoder:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+            print("  [DINOv2Encoder] Backbone frozen (linear probing mode).")
+
+        # ── 1×1 projection convs: embed_dim → out_channels[i] ─────────────────
+        # Trainable even when backbone is frozen — these adapt DINOv2 features to
+        # the segmentation task.
+        self.proj_convs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(embed_dim, out_ch, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            )
             for out_ch in out_channels
         ])
-        
-        self._init_weights()
-    
-    def interpolate_pos_encoding(self, x: torch.Tensor, H: int, W: int) -> torch.Tensor:
-        """
-        Interpolate position embeddings for arbitrary input size.
-        Handles CLS token separately.
-        
-        Args:
-            x: Patch embeddings with CLS token (B, N+1, D)
-            H, W: Input image height and width
-        
-        Returns:
-            Interpolated position embeddings (1, N+1, D)
-        """
-        N = x.shape[1] - 1  # Exclude CLS token
-        if N == self.pos_embed.shape[1] - 1:
-            return self.pos_embed
-        
-        # Separate CLS token and patch embeddings
-        pos_embed_cls = self.pos_embed[:, :1, :]  # (1, 1, D)
-        pos_embed_patches = self.pos_embed[:, 1:, :]  # (1, N_orig, D)
-        
-        dim = x.shape[-1]
-        
-        # Original grid size (from initialization)
-        orig_size = self.patch_embed.grid_size
-        
-        # Current grid size (from input)
-        h = H // self.patch_size
-        w = W // self.patch_size
-        
-        # Reshape position embeddings to 2D grid
-        pos_embed_patches = pos_embed_patches.reshape(
-            1, orig_size, orig_size, dim
-        ).permute(0, 3, 1, 2)  # (1, D, orig_size, orig_size)
-        
-        # Interpolate to current size
-        pos_embed_patches = F.interpolate(
-            pos_embed_patches,
-            size=(h, w),
-            mode='bicubic',
-            align_corners=False
-        )
-        
-        # Reshape back to sequence
-        pos_embed_patches = pos_embed_patches.permute(0, 2, 3, 1).reshape(1, h * w, dim)
-        
-        # Concatenate CLS token back
-        pos_embed = torch.cat([pos_embed_cls, pos_embed_patches], dim=1)
-        
-        return pos_embed
-    
-    def _init_weights(self):
-        """Initialize weights."""
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
-        self.apply(self._init_weights_modules)
-    
-    def _init_weights_modules(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if m.bias is not None:
+
+        self._init_proj_weights()
+
+    # ── Weight init ───────────────────────────────────────────────────────────
+
+    def _init_proj_weights(self):
+        for m in self.proj_convs.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-    
+
+    # ── Forward ───────────────────────────────────────────────────────────────
+
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
-        Forward pass.
-        
+        Extract multi-scale spatial features from a batch of RGB images.
+
         Args:
-            x: (B, C, H, W)
-        
+            x: (B, 3, H, W) — H and W must be divisible by 14.
+                              Images should use ImageNet normalisation.
+
         Returns:
-            List of multi-scale features
+            List of 4 feature maps at stride-{4,8,16,32} scales:
+                [  (B, out_ch[0], H/4,  W/4 )   ← finest, most detail
+                   (B, out_ch[1], H/8,  W/8 )
+                   (B, out_ch[2], H/16, W/16)
+                   (B, out_ch[3], H/32, W/32)  ]  ← coarsest, most semantic
         """
         B, _, H, W = x.shape
-        
-        # Patch embedding
-        x = self.patch_embed(x)  # (B, N, D)
-        
-        # Add CLS token
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)  # (B, N+1, D)
-        
-        # ═══════════════════════════════════════════════════════════
-        # FIX: Interpolate position embedding if input size differs
-        # ═══════════════════════════════════════════════════════════
-        pos_embed = self.interpolate_pos_encoding(x, H, W)
-        
-        # Add position embedding
-        x = x + pos_embed
-        
-        # Extract features at different depths
-        features = []
-        for i, block in enumerate(self.blocks):
-            x = block(x)
-            if i in self.extract_layers:
-                # Remove CLS token for spatial features
-                features.append(x[:, 1:, :])
-        
-        # Apply normalization
-        features = [self.norm(f) for f in features]
-        
-        # ═══════════════════════════════════════════════════════════
-        # FIX: Calculate actual grid size from input, not initialization
-        # ═══════════════════════════════════════════════════════════
-        grid_h = H // self.patch_size
-        grid_w = W // self.patch_size
-        
-        # Reshape to spatial format
+
+        # ── Pad input so H and W are multiples of 14 ─────────────────────────
+        # DINOv2's patch size is always 14; inputs that aren't exact multiples
+        # cause a shape mismatch in the patch embedding convolution.
+        pad_h = (PATCH_SIZE - H % PATCH_SIZE) % PATCH_SIZE
+        pad_w = (PATCH_SIZE - W % PATCH_SIZE) % PATCH_SIZE
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
+
+        _, _, H_pad, W_pad = x.shape
+        grid_h = H_pad // PATCH_SIZE
+        grid_w = W_pad // PATCH_SIZE
+
+        # ── Extract intermediate patch-token features ─────────────────────────
+        # get_intermediate_layers returns a tuple of tensors, one per requested
+        # block.  Each tensor: (B, N, embed_dim) where N = grid_h * grid_w.
+        # return_class_token=False drops the CLS token — we only need spatial tokens.
+        raw_features = self.backbone.get_intermediate_layers(
+            x,
+            n=self.extract_indices,     # list of 0-indexed block numbers
+            return_class_token=False,   # only patch tokens → (B, N, D)
+        )
+        # raw_features is a tuple of 4 tensors: each (B, N, embed_dim)
+
+        # ── Reshape patch tokens to 2D spatial grids ─────────────────────────
         spatial_features = []
-        for f in features:
-            # (B, N, D) -> (B, D, H', W')
-            f = f.transpose(1, 2).reshape(B, self.embed_dim, grid_h, grid_w)
-            spatial_features.append(f)
-        
-        # Project to output channels and create multi-scale pyramid
+        for feat in raw_features:
+            # (B, N, D) → (B, D, grid_h, grid_w)
+            feat = feat.transpose(1, 2).reshape(B, self.embed_dim, grid_h, grid_w)
+            spatial_features.append(feat)
+
+        # ── Project channels and resize to FPN pyramid scales ─────────────────
+        # Target scales: stride 4, 8, 16, 32 relative to original (unpadded) input
         outputs = []
-        for i, (feat, conv) in enumerate(zip(spatial_features, self.fpn_convs)):
-            # Project channels
-            feat = conv(feat)
-            
-            # Resize to target scale
-            target_size = (H // (4 * 2**i), W // (4 * 2**i))
+        for i, (feat, proj) in enumerate(zip(spatial_features, self.proj_convs)):
+            # Project: embed_dim → out_channels[i]
+            feat = proj(feat)
+
+            # Resize to stride-{4,8,16,32} of the ORIGINAL (unpadded) input size
+            stride     = 4 * (2 ** i)        # 4, 8, 16, 32
+            target_h   = math.ceil(H / stride)
+            target_w   = math.ceil(W / stride)
             feat = F.interpolate(
-                feat, size=target_size, mode='bilinear', align_corners=False
+                feat,
+                size=(target_h, target_w),
+                mode='bilinear',
+                align_corners=False,
             )
             outputs.append(feat)
-        
+
         return outputs
 
 
-# Configuration for different DINOv2 variants
-DINOV2_CONFIGS = {
-    'vit_s': {
-        'embed_dim': 384,
-        'depth': 12,
-        'num_heads': 6,
-        'out_channels': [48, 96, 192, 384]
-    },
-    'vit_b': {
-        'embed_dim': 768,
-        'depth': 12,
-        'num_heads': 12,
-        'out_channels': [96, 192, 384, 768]
-    },
-    'vit_l': {
-        'embed_dim': 1024,
-        'depth': 24,
-        'num_heads': 16,
-        'out_channels': [128, 256, 512, 1024]
-    },
-    'vit_g': {
-        'embed_dim': 1536,
-        'depth': 40,
-        'num_heads': 24,
-        'out_channels': [192, 384, 768, 1536]
-    }
-}
-
+# ── Factory ───────────────────────────────────────────────────────────────────
 
 def build_dinov2_encoder(
-    variant: str = 'vit_b',
-    img_size: int = 518,
-    in_channels: int = 3
+    variant:        str  = 'vit_b',
+    img_size:       int  = 512,     # kept for API compatibility, not used internally
+    in_channels:    int  = 3,
+    pretrained:     bool = True,
+    freeze_encoder: bool = False,
 ) -> DINOv2Encoder:
     """
-    Build DINOv2 encoder variant.
-    
+    Build a pretrained DINOv2 encoder.
+
     Args:
-        variant: Model size ('vit_s', 'vit_b', 'vit_l', 'vit_g')
-        img_size: Input image size
-        in_channels: Input channels
-    
+        variant:       'vit_s' | 'vit_b' | 'vit_l' | 'vit_g'
+        img_size:      Kept for API compatibility with the old from-scratch version.
+                       Not used — DINOv2 accepts arbitrary sizes via position
+                       embedding interpolation built into Meta's implementation.
+        in_channels:   Must be 3 for pretrained weights.
+        pretrained:    Load Meta pretrained weights (strongly recommended).
+        freeze_encoder: Freeze backbone weights.
+
     Returns:
         DINOv2Encoder
     """
-    if variant not in DINOV2_CONFIGS:
-        raise ValueError(f"Unknown variant: {variant}")
-    
-    config = DINOV2_CONFIGS[variant]
-    
     return DINOv2Encoder(
-        img_size=img_size,
-        patch_size=14,
+        variant=variant,
         in_channels=in_channels,
-        **config
+        pretrained=pretrained,
+        freeze_encoder=freeze_encoder,
     )
 
 
+# ── Smoke test ────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
-    print("Testing DINOv2 Encoder")
-    
-    encoder = build_dinov2_encoder('vit_b', img_size=518, in_channels=3)
-    x = torch.randn(2, 3, 518, 518)
-    
-    features = encoder(x)
-    
-    print(f"Input: {x.shape}")
+    print("Testing pretrained DINOv2 Encoder")
+
+    encoder = build_dinov2_encoder('vit_b', pretrained=True)
+    x = torch.randn(2, 3, 512, 512)
+
+    with torch.no_grad():
+        features = encoder(x)
+
+    print(f"\nInput : {x.shape}")
     for i, f in enumerate(features):
-        print(f"Feature {i+1}: {f.shape}")
-    
-    params = sum(p.numel() for p in encoder.parameters())
-    print(f"\nTotal parameters: {params:,}")
+        print(f"Scale {i+1} (stride {4 * 2**i:>2d}): {f.shape}")
+
+    backbone_params = sum(p.numel() for p in encoder.backbone.parameters())
+    proj_params     = sum(p.numel() for p in encoder.proj_convs.parameters())
+    print(f"\nBackbone parameters : {backbone_params:,}  (pretrained, fine-tuned at low LR)")
+    print(f"Projection parameters: {proj_params:,}  (randomly init, trained at full LR)")

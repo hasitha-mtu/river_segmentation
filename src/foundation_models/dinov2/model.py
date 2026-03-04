@@ -2,7 +2,22 @@
 DINOv2 Segmentation Model
 ==========================
 
-Complete model combining DINOv2 encoder and FPN decoder for semantic segmentation.
+Complete model combining pretrained DINOv2 encoder and FPN decoder for binary
+river water segmentation.
+
+Changes from the original from-scratch version
+-----------------------------------------------
+* Encoder now loads real pretrained DINOv2 weights from torch.hub.
+* ``pretrained`` and ``freeze_encoder`` arguments added so you can choose between:
+    - Full fine-tuning  (pretrained=True,  freeze_encoder=False)  ← recommended
+    - Linear probing    (pretrained=True,  freeze_encoder=True)
+    - Random baseline   (pretrained=False, freeze_encoder=False)
+* ``num_classes`` defaults to 1 (binary segmentation with BCEWithLogitsLoss),
+  matching your training setup.
+* ``get_params_groups()`` now applies 10× lower LR to the backbone and normal
+  LR to projection convs + decoder, which is the standard fine-tuning recipe.
+* ``img_size`` argument is kept for API compatibility but DINOv2 handles
+  arbitrary input sizes internally via positional embedding interpolation.
 
 Author: Hasitha
 Date: December 2025
@@ -10,7 +25,7 @@ Date: December 2025
 
 import torch
 import torch.nn as nn
-from typing import Tuple, List, Union
+from typing import List
 
 from .dinov2_encoder import DINOv2Encoder, build_dinov2_encoder, DINOV2_CONFIGS
 from .dinov2_decoder import FPNDecoder
@@ -18,177 +33,214 @@ from .dinov2_decoder import FPNDecoder
 
 class DINOv2Segmentation(nn.Module):
     """
-    DINOv2-based semantic segmentation model.
-    
-    Combines:
-    - DINOv2 ViT encoder (self-supervised)
-    - FPN decoder for segmentation
-    
+    DINOv2-based binary segmentation model.
+
+    Architecture:
+        Input (B, 3, H, W)
+            │
+            ▼  DINOv2 ViT backbone  (pretrained, fine-tuned at low LR)
+            │  + 1×1 projection convs  (random init, trained at full LR)
+            │
+            ▼  FPN decoder  (random init, trained at full LR)
+            │
+            ▼  Output logits (B, num_classes, H, W)   [no sigmoid — use BCEWithLogitsLoss]
+
     Args:
-        in_channels: Input image channels (3 for RGB)
-        num_classes: Number of segmentation classes
-        encoder_variant: DINOv2 encoder size ('vit_s', 'vit_b', 'vit_l', 'vit_g')
-        img_size: Input image size
-        fpn_channels: FPN intermediate channels
-    
+        in_channels:     Input channels (must be 3 for pretrained backbone).
+        num_classes:     Output channels — 1 for binary segmentation.
+        encoder_variant: DINOv2 size ('vit_s' | 'vit_b' | 'vit_l' | 'vit_g').
+        img_size:        Kept for API compatibility; DINOv2 handles arbitrary sizes.
+        fpn_channels:    Intermediate channels in the FPN decoder.
+        pretrained:      Load Meta pretrained DINOv2 weights (strongly recommended).
+        freeze_encoder:  Freeze backbone weights (linear probing mode).
+
     Example:
-        >>> model = DINOv2Segmentation(in_channels=3, num_classes=2, encoder_variant='vit_b')
-        >>> x = torch.randn(2, 3, 518, 518)
-        >>> output = model(x)
-        >>> print(output.shape)  # torch.Size([2, 2, 518, 518])
+        >>> model = DINOv2Segmentation(num_classes=1, encoder_variant='vit_b')
+        >>> x = torch.randn(2, 3, 512, 512)
+        >>> logits = model(x)          # (2, 1, 512, 512) — raw logits
+        >>> probs  = torch.sigmoid(logits)
     """
+
     def __init__(
         self,
-        in_channels: int = 3,
-        num_classes: int = 2,
-        encoder_variant: str = 'vit_b',
-        img_size: int = 512,
-        fpn_channels: int = 256
+        in_channels:     int  = 3,
+        num_classes:     int  = 1,
+        encoder_variant: str  = 'vit_b',
+        img_size:        int  = 512,
+        fpn_channels:    int  = 256,
+        pretrained:      bool = True,
+        freeze_encoder:  bool = False,
     ):
         super().__init__()
-        
-        self.in_channels = in_channels
-        self.num_classes = num_classes
+
+        self.in_channels     = in_channels
+        self.num_classes     = num_classes
         self.encoder_variant = encoder_variant
-        
-        # Build encoder
+
+        # ── Encoder ───────────────────────────────────────────────────────────
         self.encoder = build_dinov2_encoder(
-            variant=encoder_variant,
-            img_size=img_size,
-            in_channels=in_channels
+            variant        = encoder_variant,
+            img_size       = img_size,        # passed through for API compat
+            in_channels    = in_channels,
+            pretrained     = pretrained,
+            freeze_encoder = freeze_encoder,
         )
-        
-        # Build decoder
+
+        # ── Decoder ───────────────────────────────────────────────────────────
+        # in_channels_list comes directly from the encoder so decoder dimensions
+        # are always consistent regardless of which variant is chosen.
         self.decoder = FPNDecoder(
-            in_channels_list=self.encoder.out_channels,
-            fpn_channels=fpn_channels,
-            num_classes=num_classes
+            in_channels_list = self.encoder.out_channels,
+            fpn_channels     = fpn_channels,
+            num_classes      = num_classes,
         )
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass.
-        
+
         Args:
-            x: Input images (B, C, H, W)
-        
+            x: RGB images (B, 3, H, W), ImageNet-normalised.
+               H and W do not need to be multiples of 14 — the encoder pads
+               internally and the decoder upsamples back to the original size.
+
         Returns:
-            Segmentation output (B, num_classes, H, W)
+            Raw logits (B, num_classes, H, W).
+            Apply torch.sigmoid() for probabilities,
+            or pass directly to nn.BCEWithLogitsLoss.
         """
-        input_size = x.size()[2:]
-        
-        # Extract features
-        features = self.encoder(x)
-        
-        # Decode to segmentation
-        output = self.decoder(features, input_size)
-        
-        return output
-    
-    def get_params_groups(self, lr: float):
+        input_size = (x.shape[2], x.shape[3])   # (H, W) for decoder upsampling
+
+        features = self.encoder(x)               # list of 4 multi-scale tensors
+        logits   = self.decoder(features, input_size)
+
+        return logits
+
+    def get_params_groups(self, lr: float) -> List[dict]:
         """
-        Get parameter groups for differential learning rates.
-        
+        Parameter groups for differential learning rates.
+
+        The pretrained backbone gets 10× lower LR than the randomly-initialised
+        decoder and projection convolutions — standard practice for fine-tuning
+        large pretrained transformers.
+
         Args:
-            lr: Base learning rate
-        
+            lr: Base learning rate (applied to decoder).
+
         Returns:
-            List of parameter groups
+            List of dicts for an optimizer, e.g.:
+                optimizer = AdamW(model.get_params_groups(lr=1e-4))
         """
         return [
-            {'params': self.encoder.parameters(), 'lr': lr * 0.1},
-            {'params': self.decoder.parameters(), 'lr': lr}
+            # Pretrained backbone — gentle fine-tuning
+            {
+                'params' : self.encoder.backbone.parameters(),
+                'lr'     : lr * 0.1,
+                'name'   : 'backbone',
+            },
+            # Projection convs — bridge pretrained features to FPN
+            {
+                'params' : self.encoder.proj_convs.parameters(),
+                'lr'     : lr,
+                'name'   : 'proj_convs',
+            },
+            # FPN decoder — fully task-specific
+            {
+                'params' : self.decoder.parameters(),
+                'lr'     : lr,
+                'name'   : 'decoder',
+            },
         ]
 
 
+# ── Factory ───────────────────────────────────────────────────────────────────
+
 def build_dinov2_segmentation(
-    variant: str = 'vit_b',
-    in_channels: int = 3,
-    num_classes: int = 1,
-    img_size: int = 512,
-    fpn_channels: int = 256
+    variant:        str  = 'vit_b',
+    in_channels:    int  = 3,
+    num_classes:    int  = 1,
+    img_size:       int  = 512,
+    fpn_channels:   int  = 256,
+    pretrained:     bool = True,
+    freeze_encoder: bool = False,
 ) -> DINOv2Segmentation:
     """
-    Factory function to build DINOv2 segmentation variants.
-    
+    Factory function for DINOv2 segmentation models.
+
     Args:
-        variant: Model size ('vit_s', 'vit_b', 'vit_l', 'vit_g')
-            - vit_s: Small model, ~22M params, fast inference
-            - vit_b: Base model, ~86M params, good accuracy
-            - vit_l: Large model, ~304M params, better accuracy
-            - vit_g: Giant model, ~1.1B params, best accuracy
-        in_channels: Input channels (3 for RGB)
-        num_classes: Number of segmentation classes
-        img_size: Input image size (default 518 for DINOv2)
-        fpn_channels: FPN channels
-    
-    Returns:
-        DINOv2Segmentation model
-    
-    Example:
-        >>> model = build_dinov2_segmentation('vit_b', in_channels=3, num_classes=2)
-        >>> x = torch.randn(2, 3, 518, 518)
-        >>> output = model(x)
+        variant:        'vit_s' | 'vit_b' | 'vit_l' | 'vit_g'
+        in_channels:    Must be 3 for pretrained weights.
+        num_classes:    1 for binary segmentation (water / no-water).
+        img_size:       Kept for API compatibility.
+        fpn_channels:   FPN intermediate channels (256 is standard).
+        pretrained:     Load Meta pretrained weights.
+        freeze_encoder: Freeze backbone (linear probing).
+
+    Recommended usage for your benchmark:
+        >>> # Full fine-tuning (best accuracy, standard approach)
+        >>> model = build_dinov2_segmentation('vit_b')
+
+        >>> # Linear probing (fast baseline, tests feature quality alone)
+        >>> model = build_dinov2_segmentation('vit_b', freeze_encoder=True)
     """
     if variant not in DINOV2_CONFIGS:
         raise ValueError(
-            f"Unknown variant: {variant}. "
+            f"Unknown variant: '{variant}'. "
             f"Choose from {list(DINOV2_CONFIGS.keys())}"
         )
-    
-    model = DINOv2Segmentation(
-        in_channels=in_channels,
-        num_classes=num_classes,
-        encoder_variant=variant,
-        img_size=img_size,
-        fpn_channels=fpn_channels
-    )
-    
-    return model
 
+    return DINOv2Segmentation(
+        in_channels     = in_channels,
+        num_classes     = num_classes,
+        encoder_variant = variant,
+        img_size        = img_size,
+        fpn_channels    = fpn_channels,
+        pretrained      = pretrained,
+        freeze_encoder  = freeze_encoder,
+    )
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=" * 80)
-    print("DINOv2 Segmentation Model")
-    print("=" * 80)
-    
-    # Create model
+    print("=" * 70)
+    print("DINOv2 Segmentation Model — Pretrained")
+    print("=" * 70)
+
     model = build_dinov2_segmentation(
-        variant='vit_b',
-        in_channels=3,
-        num_classes=1,
-        img_size=512
+        variant     = 'vit_b',
+        in_channels = 3,
+        num_classes = 1,       # binary: water vs background
+        img_size    = 512,
+        pretrained  = True,
     )
-    
-    # Test forward pass
-    batch_size = 2
-    x = torch.randn(batch_size, 3, 512, 512)
-    
-    print(f"\nInput shape: {x.shape}")
-    
+
+    x = torch.randn(2, 3, 512, 512)
+    print(f"\nInput : {x.shape}")
+
     with torch.no_grad():
-        output = model(x)
-    
-    print(f"Output shape: {output.shape}")
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    encoder_params = sum(p.numel() for p in model.encoder.parameters())
-    decoder_params = sum(p.numel() for p in model.decoder.parameters())
-    
+        logits = model(x)
+        probs  = torch.sigmoid(logits)
+
+    print(f"Logits: {logits.shape}")
+    print(f"Probs : {probs.shape}  (min={probs.min():.3f}, max={probs.max():.3f})")
+
+    # Parameter breakdown
+    backbone_p = sum(p.numel() for p in model.encoder.backbone.parameters())
+    proj_p     = sum(p.numel() for p in model.encoder.proj_convs.parameters())
+    decoder_p  = sum(p.numel() for p in model.decoder.parameters())
+    total_p    = backbone_p + proj_p + decoder_p
+
     print(f"\nParameter breakdown:")
-    print(f"  Encoder: {encoder_params:,} ({encoder_params/total_params*100:.1f}%)")
-    print(f"  Decoder: {decoder_params:,} ({decoder_params/total_params*100:.1f}%)")
-    print(f"  Total:   {total_params:,}")
-    print(f"  Size:    {total_params * 4 / 1024 / 1024:.2f} MB (float32)")
-    
-    # Test all variants
-    print("\n" + "=" * 80)
-    print("All DINOv2 Variants")
-    print("=" * 80)
-    
-    for variant in ['vit_s', 'vit_b', 'vit_l', 'vit_g']:
-        model = build_dinov2_segmentation(variant=variant, in_channels=3, num_classes=2, img_size=518)
-        params = sum(p.numel() for p in model.parameters())
-        print(f"{variant.upper():10s}: {params:,} parameters "
-              f"({params * 4 / 1024 / 1024:.1f} MB)")
+    print(f"  Backbone (pretrained, LR×0.1) : {backbone_p:>12,}  ({backbone_p/total_p*100:.1f}%)")
+    print(f"  Projections (random init)     : {proj_p:>12,}  ({proj_p/total_p*100:.1f}%)")
+    print(f"  FPN Decoder (random init)     : {decoder_p:>12,}  ({decoder_p/total_p*100:.1f}%)")
+    print(f"  Total                         : {total_p:>12,}  ({total_p*4/1024/1024:.1f} MB fp32)")
+
+    # Verify differential LR groups
+    print("\nParameter groups (for AdamW):")
+    for g in model.get_params_groups(lr=1e-4):
+        n = sum(p.numel() for p in g['params'])
+        print(f"  {g['name']:15s}  LR={g['lr']:.1e}  params={n:,}")
+
+    print("\n✓ Forward pass OK")
