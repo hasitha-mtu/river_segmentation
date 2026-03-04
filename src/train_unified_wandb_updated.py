@@ -431,6 +431,17 @@ class UnifiedTrainer:
         self.best_val_dice = 0.0
         self.best_val_iou  = 0.0
 
+        # Early stopping state.
+        # Disabled by default (patience=None) — only active when the config
+        # explicitly sets 'early_stopping_patience', which train_all_models()
+        # does exclusively for foundation models (sam, dinov2).
+        # All already-completed models ran with patience=None (full 100 epochs),
+        # so this does not alter their training conditions.
+        self.es_patience  = config['training'].get('early_stopping_patience',  None)
+        self.es_min_delta = config['training'].get('early_stopping_min_delta', 1e-4)
+        self.es_counter   = 0
+        self.es_best_dice = 0.0
+
         if config['training'].get('resume', False):
             self.load_checkpoint()
 
@@ -541,6 +552,10 @@ class UnifiedTrainer:
         if self.is_global_local:
             print(f'Aux weight : {self.aux_weight}')
         print(f'Epochs     : {self.config["training"]["epochs"]}')
+        if self.es_patience:
+            print(f'Early stop : patience={self.es_patience}, min_delta={self.es_min_delta}')
+        else:
+            print(f'Early stop : DISABLED (fixed epochs)')
         if self.use_wandb:
             print(f'W&B        : ENABLED ({wandb.run.name})')
         else:
@@ -905,12 +920,41 @@ class UnifiedTrainer:
                     wandb.run.summary['best_epoch']    = epoch
 
             self.save_checkpoint(epoch, val_metrics['dice'], val_metrics['iou'], is_best)
+
+            # Early stopping — only active when es_patience is set in config.
+            # Foundation models (sam, dinov2) have this enabled; all previously
+            # completed models did not, preserving identical training conditions
+            # for the benchmark comparison.
+            if self.es_patience is not None:
+                if val_metrics['dice'] > self.es_best_dice + self.es_min_delta:
+                    self.es_best_dice = val_metrics['dice']
+                    self.es_counter   = 0
+                else:
+                    self.es_counter += 1
+                    print(f'  [EarlyStopping] No significant improvement for '
+                          f'{self.es_counter}/{self.es_patience} epoch(s). '
+                          f'Best={self.es_best_dice:.4f}, '
+                          f'Current={val_metrics["dice"]:.4f}')
+                if self.es_counter >= self.es_patience:
+                    print(f'\n[EarlyStopping] Triggered at epoch {epoch + 1}. '
+                          f'Best val Dice: {self.es_best_dice:.4f}')
+                    if self.use_wandb:
+                        wandb.run.summary['stopped_epoch']    = epoch + 1
+                        wandb.run.summary['early_stopped']    = True
+                        wandb.run.summary['es_best_val_dice'] = self.es_best_dice
+                    self.writer.add_scalar('EarlyStopping/stopped_epoch', epoch + 1, epoch)
+                    print('-' * 80)
+                    break
+
             print('-' * 80)
 
         print('\n' + '=' * 80)
         print('TRAINING COMPLETE')
-        print(f'Best Dice : {self.best_val_dice:.4f}')
-        print(f'Best IoU  : {self.best_val_iou:.4f}')
+        print(f'Best Dice     : {self.best_val_dice:.4f}')
+        print(f'Best IoU      : {self.best_val_iou:.4f}')
+        print(f'Epochs run    : {epoch + 1} / {self.config["training"]["epochs"]}')
+        if self.es_patience:
+            print(f'Early stopped : {"YES" if self.es_counter >= self.es_patience else "NO"}')
         print('=' * 80 + '\n')
 
         self.writer.close()
@@ -1186,6 +1230,8 @@ def train_all_models(base_config: dict):
         'sam'            : ['vit_b', 'vit_l', 'vit_h'],
     }
 
+    FOUNDATION_MODELS = {'sam', 'dinov2'}
+
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
             tag = f'{model_name}' + (f' - {variant}' if variant else '')
@@ -1193,6 +1239,21 @@ def train_all_models(base_config: dict):
             config = {**base_config}
             config['model'] = {**base_config['model'],
                                 'name': model_name, 'variant': variant}
+
+            if model_name in FOUNDATION_MODELS:
+                # Early stopping for foundation models only.
+                # All other models in this benchmark were trained with fixed
+                # 100 epochs (no early stopping). Foundation models are being
+                # retrained with a corrected implementation, so early stopping
+                # is added here to prevent overfitting on the 274-image
+                # training set given their large parameter counts.
+                # This asymmetry is noted in the paper's training details.
+                config['training'] = {
+                    **config['training'],
+                    'early_stopping_patience' : 20,
+                    'early_stopping_min_delta': 1e-4,
+                }
+
             train_single_model(config)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
