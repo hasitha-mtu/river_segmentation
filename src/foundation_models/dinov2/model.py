@@ -116,39 +116,55 @@ class DINOv2Segmentation(nn.Module):
 
         return logits
 
-    def get_params_groups(self, lr: float) -> List[dict]:
-        """
-        Parameter groups for differential learning rates.
+    # def get_params_groups(self, lr: float) -> List[dict]:
+    #     """
+    #     Parameter groups for differential learning rates.
 
-        The pretrained backbone gets 10× lower LR than the randomly-initialised
-        decoder and projection convolutions — standard practice for fine-tuning
-        large pretrained transformers.
+    #     The pretrained backbone gets 10× lower LR than the randomly-initialised
+    #     decoder and projection convolutions — standard practice for fine-tuning
+    #     large pretrained transformers.
 
-        Args:
-            lr: Base learning rate (applied to decoder).
+    #     Args:
+    #         lr: Base learning rate (applied to decoder).
 
-        Returns:
-            List of dicts for an optimizer, e.g.:
-                optimizer = AdamW(model.get_params_groups(lr=1e-4))
-        """
+    #     Returns:
+    #         List of dicts for an optimizer, e.g.:
+    #             optimizer = AdamW(model.get_params_groups(lr=1e-4))
+    #     """
+    #     return [
+    #         # Pretrained backbone — gentle fine-tuning
+    #         {
+    #             'params' : self.encoder.backbone.parameters(),
+    #             'lr'     : lr * 0.1,
+    #             'name'   : 'backbone',
+    #         },
+    #         # Projection convs — bridge pretrained features to FPN
+    #         {
+    #             'params' : self.encoder.proj_convs.parameters(),
+    #             'lr'     : lr,
+    #             'name'   : 'proj_convs',
+    #         },
+    #         # FPN decoder — fully task-specific
+    #         {
+    #             'params' : self.decoder.parameters(),
+    #             'lr'     : lr,
+    #             'name'   : 'decoder',
+    #         },
+    #     ]
+    
+    def get_params_groups(self, lr: float):
         return [
-            # Pretrained backbone — gentle fine-tuning
             {
-                'params' : self.encoder.backbone.parameters(),
-                'lr'     : lr * 0.1,
-                'name'   : 'backbone',
+                'params': self.encoder.backbone.parameters(),
+                'lr'    : lr * 0.1,   # 1e-5 — gentle fine-tuning of pretrained weights
             },
-            # Projection convs — bridge pretrained features to FPN
             {
-                'params' : self.encoder.proj_convs.parameters(),
-                'lr'     : lr,
-                'name'   : 'proj_convs',
+                'params': self.encoder.proj_convs.parameters(),
+                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, needs to learn fast from scratch
             },
-            # FPN decoder — fully task-specific
             {
-                'params' : self.decoder.parameters(),
-                'lr'     : lr,
-                'name'   : 'decoder',
+                'params': self.decoder.parameters(),
+                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, same reason
             },
         ]
 

@@ -123,39 +123,55 @@ class SAMSegmentation(nn.Module):
 
         return logits
 
-    def get_params_groups(self, lr: float) -> List[dict]:
-        """
-        Parameter groups for differential learning rates.
+    # def get_params_groups(self, lr: float) -> List[dict]:
+    #     """
+    #     Parameter groups for differential learning rates.
 
-        The pretrained SAM backbone gets 10× lower LR than the randomly-
-        initialised projection convolutions and decoder — matching the standard
-        fine-tuning recipe used for DINOv2.
+    #     The pretrained SAM backbone gets 10× lower LR than the randomly-
+    #     initialised projection convolutions and decoder — matching the standard
+    #     fine-tuning recipe used for DINOv2.
 
-        Args:
-            lr: Base learning rate (applied to decoder and projection convs).
+    #     Args:
+    #         lr: Base learning rate (applied to decoder and projection convs).
 
-        Returns:
-            List of dicts for AdamW, e.g.:
-                optimizer = AdamW(model.get_params_groups(lr=1e-4))
-        """
+    #     Returns:
+    #         List of dicts for AdamW, e.g.:
+    #             optimizer = AdamW(model.get_params_groups(lr=1e-4))
+    #     """
+    #     return [
+    #         # Pretrained SAM image encoder — gentle fine-tuning
+    #         {
+    #             'params' : self.encoder.backbone.parameters(),
+    #             'lr'     : lr * 0.1,
+    #             'name'   : 'backbone',
+    #         },
+    #         # Projection convs — bridge SAM features to FPN channel dimensions
+    #         {
+    #             'params' : self.encoder.proj_convs.parameters(),
+    #             'lr'     : lr,
+    #             'name'   : 'proj_convs',
+    #         },
+    #         # FPN decoder — fully task-specific, trained from scratch
+    #         {
+    #             'params' : self.decoder.parameters(),
+    #             'lr'     : lr,
+    #             'name'   : 'decoder',
+    #         },
+    #     ]
+    
+    def get_params_groups(self, lr: float):
         return [
-            # Pretrained SAM image encoder — gentle fine-tuning
             {
-                'params' : self.encoder.backbone.parameters(),
-                'lr'     : lr * 0.1,
-                'name'   : 'backbone',
+                'params': self.encoder.backbone.parameters(),
+                'lr'    : lr * 0.1,   # 1e-5 — gentle fine-tuning of pretrained weights
             },
-            # Projection convs — bridge SAM features to FPN channel dimensions
             {
-                'params' : self.encoder.proj_convs.parameters(),
-                'lr'     : lr,
-                'name'   : 'proj_convs',
+                'params': self.encoder.proj_convs.parameters(),
+                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, needs to learn fast from scratch
             },
-            # FPN decoder — fully task-specific, trained from scratch
             {
-                'params' : self.decoder.parameters(),
-                'lr'     : lr,
-                'name'   : 'decoder',
+                'params': self.decoder.parameters(),
+                'lr'    : lr * 10.0,  # 1e-3 — was 1e-4, same reason
             },
         ]
 
