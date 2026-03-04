@@ -1384,7 +1384,7 @@ def main():
     # train_single_model(gl_asym)
 
     # ── Option D: All standard models ─────────────────────────────────────────
-    # train_all_models(get_default_config())
+    train_all_models(get_default_config())
 
     # ── Option E: All GlobalLocal symmetric experiments ───────────────────────
     # train_all_global_local_models(get_default_config(), symmetric_only=True)
