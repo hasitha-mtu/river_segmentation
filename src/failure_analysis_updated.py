@@ -551,19 +551,12 @@ def _plot_coverage_performance(
         'convnext_upernet_tiny': 'Hybrid SOTA',
         'segformer_b2': 'Transformer',
         'segformer_b0': 'Transformer',
-        'swin_unet_tiny': 'Transformer',
-        'sam_vit_b': 'Foundation',
-        'sam_vit_l': 'Foundation',
-        'sam_vit_h': 'Foundation',
-        'dinov2_vit_b': 'Foundation',
-        'dinov2_vit_s': 'Foundation',
-        'dinov2_vit_l': 'Foundation',
+        'swin_unet_tiny': 'Transformer'
     }
     family_colours = {
         'CNN Baseline': '#2196F3',
         'Hybrid SOTA' : '#FF9800',
-        'Transformer' : '#9C27B0',
-        'Foundation'  : '#F44336',
+        'Transformer' : '#9C27B0'
     }
 
     x = np.arange(len(bin_labels))
@@ -594,7 +587,7 @@ def _plot_coverage_performance(
 
     ax.set_xlabel('Ground-truth water coverage bin', fontsize=12)
     ax.set_ylabel('Mean Dice (per bin)', fontsize=12)
-    # ax.set_title('Coverage–Performance Gradient across Architecture Families', y=-0.3, fontsize=12)
+    ax.set_title('Coverage–Performance Gradient across Architecture Families', fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(bin_labels, rotation=30, ha='right', fontsize=12)
     ax.set_ylim(0, 1.0)
