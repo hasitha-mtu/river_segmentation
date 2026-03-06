@@ -369,68 +369,95 @@ def save_result_image(
     model_name   : str,
     threshold    : float,
     heatmap_cmap : str = 'jet',
+    jpeg_quality : int = 85,
+    max_panel_w  : int = 1920,
 ):
     """
-    Save a 3-panel PNG:
+    Save a 3-panel JPEG:
         [ Original image | Probability heatmap | Prediction overlay ]
 
-    The panels are composited at the ORIGINAL image resolution so fine river
-    features remain visible.
+    Why JPEG, not PNG
+    -----------------
+    The 3-panel strip is rendered at full drone resolution (5472×3648 typical),
+    producing a ~16000×3648 canvas.  PNG is lossless — each file can exceed
+    100 MB, and a full benchmark run (20 models × hundreds of images) reaches
+    hundreds of GB.  JPEG at quality=85 keeps each file under ~3–5 MB with no
+    visible degradation for visual inspection.
+
+    Note: passing ``quality`` to PIL's PNG save is silently ignored — PNG has
+    no quality setting.  This was the original bug causing the bloated files.
+
+    Resolution cap
+    --------------
+    ``max_panel_w`` caps each panel's width before compositing.  The default
+    (1920 px) means the full strip is at most 5760 px wide — enough to inspect
+    fine river features while being practical to open and store.  Set to 0 to
+    render at full original resolution.
     """
-    img_path   = result['image_path']
-    orig_w     = result['orig_w']
-    orig_h     = result['orig_h']
-    prob_map   = result['prob_map']    # inference resolution (image_size × image_size)
-    pred_mask  = result['pred_mask']
+    img_path  = result['image_path']
+    orig_w    = result['orig_w']
+    orig_h    = result['orig_h']
+    prob_map  = result['prob_map']
+    pred_mask = result['pred_mask']
 
-    # ── Load original image at its native resolution ──────────────────────────
+    # ── Determine display resolution (cap width, preserve aspect ratio) ───────
+    if max_panel_w > 0 and orig_w > max_panel_w:
+        scale  = max_panel_w / orig_w
+        disp_w = max_panel_w
+        disp_h = max(1, int(orig_h * scale))
+    else:
+        disp_w, disp_h = orig_w, orig_h
+
+    # ── Load original image at display resolution ─────────────────────────────
     orig_pil = Image.open(img_path).convert('RGB')
-    orig_np  = np.array(orig_pil)     # [orig_h, orig_w, 3] uint8
+    if (disp_w, disp_h) != (orig_w, orig_h):
+        orig_pil = orig_pil.resize((disp_w, disp_h), Image.LANCZOS)
+    orig_np = np.array(orig_pil)
 
-    # ── Resize prob_map and pred_mask back to original resolution ─────────────
+    # ── Resize prob_map and pred_mask to display resolution ───────────────────
     prob_pil  = Image.fromarray((prob_map * 255).astype(np.uint8)).resize(
-        (orig_w, orig_h), Image.BILINEAR)
+        (disp_w, disp_h), Image.BILINEAR)
     prob_full = np.array(prob_pil).astype(np.float32) / 255.0
 
     mask_pil  = Image.fromarray(pred_mask.astype(np.uint8) * 255).resize(
-        (orig_w, orig_h), Image.NEAREST)
+        (disp_w, disp_h), Image.NEAREST)
     mask_full = np.array(mask_pil) > 127
 
     # ── Build panels ──────────────────────────────────────────────────────────
     heatmap_np = apply_colormap(prob_full, heatmap_cmap)
     overlay_np = make_overlay_panel(orig_np, mask_full)
 
-    water_pct  = mask_full.mean() * 100
+    water_pct = mask_full.mean() * 100
 
-    # ── Add text labels using PIL ─────────────────────────────────────────────
+    # ── Add text labels ───────────────────────────────────────────────────────
     def label_panel(arr: np.ndarray, text: str) -> np.ndarray:
-        """Write a label banner at the top of a panel."""
-        pil = Image.fromarray(arr)
-        # Create a dark banner
-        banner_h = max(22, orig_h // 30)
-        banner   = Image.new('RGB', (orig_w, banner_h), color=(20, 20, 20))
+        pil      = Image.fromarray(arr)
+        banner_h = max(22, disp_h // 30)
+        banner   = Image.new('RGB', (disp_w, banner_h), color=(20, 20, 20))
         try:
-            from PIL import ImageDraw, ImageFont
+            from PIL import ImageDraw
             draw = ImageDraw.Draw(banner)
             draw.text((4, 3), text, fill=(240, 240, 240))
         except Exception:
             pass
-        combined = Image.new('RGB', (orig_w, orig_h + banner_h))
+        combined = Image.new('RGB', (disp_w, disp_h + banner_h))
         combined.paste(banner, (0, 0))
         combined.paste(pil,    (0, banner_h))
         return np.array(combined)
 
-    panel1 = label_panel(orig_np,   'Original')
+    panel1 = label_panel(orig_np,    'Original')
     panel2 = label_panel(heatmap_np, f'Probability  (threshold={threshold:.2f})')
-    panel3 = label_panel(overlay_np,
-                         f'Prediction  |  water={water_pct:.2f}%  |  {model_name}')
+    panel3 = label_panel(overlay_np, f'Prediction  |  water={water_pct:.2f}%  |  {model_name}')
 
-    # Make sure all panels have the same height (orig_h + banner_h)
-    h      = panel1.shape[0]
-    strip  = np.concatenate([panel1, panel2, panel3], axis=1)
+    strip = np.concatenate([panel1, panel2, panel3], axis=1)
 
+    # ── Save as JPEG ──────────────────────────────────────────────────────────
+    # Force .jpg extension — the original .png extension caused PIL to write a
+    # lossless file where the quality= argument is silently ignored.
+    out_path = out_path.with_suffix('.jpg')
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(strip).save(out_path, quality=92)
+    Image.fromarray(strip).save(str(out_path), format='JPEG',
+                                quality=jpeg_quality, optimize=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,6 +523,12 @@ def parse_args():
                    help='Skip GlobalLocal models (useful when paired global images are unavailable).')
     p.add_argument('--no_cuda', action='store_true',
                    help='Force CPU inference.')
+    p.add_argument('--jpeg_quality', type=int, default=85,
+                   help='JPEG quality for saved overlays (1–95). Default 85.')
+    p.add_argument('--max_panel_w', type=int, default=1920,
+                   help='Cap each panel width to this many pixels before compositing. '
+                        'Set 0 for full original resolution (warning: very large files). '
+                        'Default 1920.')
     return p.parse_args()
 
 
@@ -609,7 +642,7 @@ def main():
         for res in results:
             img_stem  = Path(res['image_path']).stem
             location  = res['location']
-            out_path  = model_out_dir / location / f'{img_stem}_pred.png'
+            out_path  = model_out_dir / location / f'{img_stem}_pred.jpg'
 
             try:
                 save_result_image(
@@ -618,6 +651,8 @@ def main():
                     model_name   = display_name,
                     threshold    = args.threshold,
                     heatmap_cmap = args.heatmap_cmap,
+                    jpeg_quality = args.jpeg_quality,
+                    max_panel_w  = args.max_panel_w,
                 )
                 n_saved += 1
             except Exception as e:
