@@ -27,9 +27,8 @@ def get_model(model_name, variant, n_channels=3, n_classes=1):
             num_classes=n_classes)
     elif model_name == 'dinov2':
         return build_dinov2_segmentation(
-            variant=variant, 
-            in_channels=n_channels, 
-            num_classes=n_classes)
+            num_classes=n_classes,
+            variant=variant)
     elif model_name == 'convnext_upernet':
         return build_convnext_upernet(
             variant=variant, 
