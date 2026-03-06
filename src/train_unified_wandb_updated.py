@@ -45,6 +45,17 @@ from wrapper import GlobalLocalWrapper
 from torchviz import make_dot
 import inspect
 
+# SAM-specific imports — only required when training SAM variants.
+# If segment_anything is not installed and SAM is not being trained, these
+# can be safely ignored.
+try:
+    from segment_anything import sam_model_registry
+    from segment_anything.utils.transforms import ResizeLongestSide
+    SAM_AVAILABLE = True
+except ImportError:
+    SAM_AVAILABLE = False
+    print('[WARN] segment_anything not found — SAM training will not be available.')
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dual Dataset
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,47 +207,171 @@ class GlobalLocalDataset(Dataset):
         return local_img, global_img, mask
 
 
-def get_global_local_dataloaders(config: dict):
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAM Dataset
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SAM uses its own normalisation (pixel values 0-255, not 0-1).
+# These match the values hardcoded inside sam_model.preprocess().
+_SAM_PIXEL_MEAN = torch.tensor([123.675, 116.28,  103.53 ]).view(3, 1, 1)
+_SAM_PIXEL_STD  = torch.tensor([ 58.395,  57.12,   57.375]).view(3, 1, 1)
+
+
+def _sam_preprocess(x: torch.Tensor, img_size: int = 1024) -> torch.Tensor:
     """
-    Build train and val DataLoaders for GlobalLocal dual-branch training.
-
-    Reads from config['data']['local_root'] and config['data']['global_root'].
+    Replicate sam_model.preprocess() without requiring the model object.
+    Input  : float tensor [3, H, W], pixel values 0-255
+    Output : float tensor [3, img_size, img_size], normalised + zero-padded
     """
-    data_cfg   = config['data']
-    system_cfg = config['system']
+    x = (x.float() - _SAM_PIXEL_MEAN) / _SAM_PIXEL_STD
+    h, w = x.shape[-2:]
+    pad_h = img_size - h
+    pad_w = img_size - w
+    x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h))
+    return x
 
-    train_ds = GlobalLocalDataset(
-        local_root  = data_cfg['local_root'],
-        global_root = data_cfg['global_root'],
-        split       = 'train',
-        image_size  = data_cfg.get('image_size', 512),
-        augment     = data_cfg.get('augment_train', True),
-    )
-    val_ds = GlobalLocalDataset(
-        local_root  = data_cfg['local_root'],
-        global_root = data_cfg['global_root'],
-        split       = 'val',
-        image_size  = data_cfg.get('image_size', 512),
-        augment     = False,
-    )
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size  = config['training']['batch_size'],
-        shuffle     = True,
-        num_workers = system_cfg.get('num_workers', 0),
-        pin_memory  = True,
-        drop_last   = True,     # keeps batch stats stable for BatchNorm
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size  = config['training']['batch_size'],
-        shuffle     = False,
-        num_workers = system_cfg.get('num_workers', 0),
-        pin_memory  = True,
-    )
+class SAMDataset(Dataset):
+    """
+    On-the-fly dataset for SAM fine-tuning.
 
-    return train_loader, val_loader
+    Unlike the original train_sam.py (which pre-loads all images into a RAM
+    dict), this dataset loads and preprocesses images on demand so it scales
+    to any dataset size.
+
+    Pipeline per sample
+    -------------------
+    1. Load image (JPEG) with PIL, convert to RGB.
+    2. Resize to `image_size × image_size` (matching every other model's input
+       so that masks are on a consistent grid).
+    3. Optionally apply random flips / 90° rotations for training augmentation.
+    4. Apply SAM's ResizeLongestSide(1024) — for a 512×512 square input this
+       produces a 1024×1024 tensor (both sides equal the longest side).
+    5. Convert to float tensor [3, H', W'] (pixel values 0-255).
+    6. Apply SAM normalisation + zero-padding to 1024×1024.
+    7. Load the corresponding mask (PNG), resize to `image_size`, binarise.
+
+    Returned batch dict keys
+    ------------------------
+    input_tensor   : FloatTensor [3, 1024, 1024]  — SAM-preprocessed image
+    input_size     : LongTensor  [2]              — (H', W') after ResizeLongestSide
+    original_size  : LongTensor  [2]              — (image_size, image_size)
+    mask           : FloatTensor [1, image_size, image_size]  — binary 0/1
+    image_name     : str
+    """
+
+    SAM_IMG_SIZE = 1024  # SAM ViT input resolution (fixed for all variants)
+
+    def __init__(
+        self,
+        data_root : str,
+        split     : str,
+        image_size: int  = 512,
+        augment   : bool = False,
+    ):
+        import cv2 as _cv2
+        self._cv2       = _cv2
+        self.image_size = image_size
+        self.augment    = augment
+
+        img_dir  = Path(data_root) / split / 'images'
+        mask_dir = Path(data_root) / split / 'masks'
+
+        # Accept .jpg and .png images; sort for reproducibility
+        img_paths  = sorted(img_dir.glob('*.jpg')) + sorted(img_dir.glob('*.png'))
+        self.samples: list[tuple[Path, Path]] = []
+        skipped = 0
+
+        for img_path in img_paths:
+            # Match mask by stem regardless of extension
+            mask_path = mask_dir / f'{img_path.stem}.png'
+            if not mask_path.exists():
+                # Fallback: try .jpg mask
+                mask_path = mask_dir / f'{img_path.stem}.jpg'
+            if not mask_path.exists():
+                skipped += 1
+                continue
+            self.samples.append((img_path, mask_path))
+
+        if skipped:
+            print(f'  [SAMDataset/{split}] Skipped {skipped} images (no matching mask).')
+        print(f'  [SAMDataset/{split}] {len(self.samples)} samples loaded.')
+
+        if SAM_AVAILABLE:
+            self.resize_transform = ResizeLongestSide(self.SAM_IMG_SIZE)
+        else:
+            raise RuntimeError(
+                'segment_anything is not installed. '
+                'Run: pip install git+https://github.com/facebookresearch/segment-anything.git'
+            )
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> dict:
+        img_path, mask_path = self.samples[idx]
+
+        # ── Load image ────────────────────────────────────────────────────
+        image = self._cv2.imread(str(img_path))
+        image = self._cv2.cvtColor(image, self._cv2.COLOR_BGR2RGB)
+        image = self._cv2.resize(
+            image, (self.image_size, self.image_size),
+            interpolation=self._cv2.INTER_LINEAR,
+        )
+
+        # ── Load mask ─────────────────────────────────────────────────────
+        mask = self._cv2.imread(str(mask_path), self._cv2.IMREAD_GRAYSCALE)
+        mask = self._cv2.resize(
+            mask, (self.image_size, self.image_size),
+            interpolation=self._cv2.INTER_NEAREST,
+        )
+        mask = (mask > 127).astype(np.float32)  # binary 0.0 / 1.0
+
+        # ── Augmentation (same transform applied to image AND mask) ───────
+        if self.augment:
+            image, mask = self._augment(image, mask)
+
+        original_size = (image.shape[0], image.shape[1])  # (512, 512)
+
+        # ── SAM preprocessing ─────────────────────────────────────────────
+        # ResizeLongestSide preserves aspect ratio; for square 512×512 input
+        # this gives exactly 1024×1024.
+        resized_image = self.resize_transform.apply_image(image)         # np uint8 [H', W', 3]
+        input_size    = (resized_image.shape[0], resized_image.shape[1]) # (H', W')
+
+        # Convert to float tensor [3, H', W'], then normalise + pad to 1024×1024
+        img_tensor    = torch.as_tensor(resized_image).permute(2, 0, 1).float()
+        input_tensor  = _sam_preprocess(img_tensor, self.SAM_IMG_SIZE)   # [3, 1024, 1024]
+
+        # ── Mask tensor ───────────────────────────────────────────────────
+        mask_tensor = torch.from_numpy(mask).unsqueeze(0)  # [1, 512, 512]
+
+        return {
+            'input_tensor' : input_tensor,                              # [3, 1024, 1024]
+            'input_size'   : torch.tensor(input_size,    dtype=torch.long),  # [2]
+            'original_size': torch.tensor(original_size, dtype=torch.long),  # [2]
+            'mask'         : mask_tensor,                               # [1, 512, 512]
+            'image_name'   : img_path.stem,
+        }
+
+    def _augment(self, image: np.ndarray, mask: np.ndarray):
+        """Apply identical random flips / 90° rotations to image and mask."""
+        import random
+        # Horizontal flip
+        if random.random() > 0.5:
+            image = np.fliplr(image).copy()
+            mask  = np.fliplr(mask).copy()
+        # Vertical flip
+        if random.random() > 0.5:
+            image = np.flipud(image).copy()
+            mask  = np.flipud(mask).copy()
+        # Random 90° rotation
+        k = random.randint(0, 3)
+        if k > 0:
+            image = np.rot90(image, k).copy()
+            mask  = np.rot90(mask,  k).copy()
+        return image, mask
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,20 +379,11 @@ def get_global_local_dataloaders(config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UnifiedTrainer:
-    """
-    Unified trainer supporting:
-      • Standard single-input models (CNN, Transformer, Foundation)
-      • GlobalLocal dual-branch model (global_local mode)
-
-    Set config['model']['name'] = 'global_local' to activate dual-branch mode.
-    """
 
     def __init__(self, config: dict):
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # Detect operating mode early — used throughout __init__
-        self.is_global_local = (config['model']['name'] == 'global_local')
 
         # ── GPU diagnostics ────────────────────────────────────────────────
         if torch.cuda.is_available():
@@ -280,39 +406,31 @@ class UnifiedTrainer:
         if self.use_wandb:
             self.init_wandb()
 
+        # ── Mode flags — must be set before any method that reads them ────
+        model_name = config['model']['name']
+        variant    = config['model'].get('variant', None)
+        self.is_sam  = (model_name == 'sam')
+
         # ── Model ─────────────────────────────────────────────────────────
-        if self.is_global_local:
-            gl_cfg = config['model'].get('global_local', {})
+        print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
 
-            # Global branch config — falls back to top-level model keys so
-            # existing single-model configs also work as the global branch.
-            global_name    = gl_cfg.get('global_model_name',
-                                        config['model'].get('name', 'unet'))
-            global_variant = gl_cfg.get('global_variant',
-                                        config['model'].get('variant', None))
-
-            # Local branch config — defaults to same as global (symmetric)
-            local_name    = gl_cfg.get('local_model_name',  None)
-            local_variant = gl_cfg.get('local_variant',     None)
-
-            print(f'\nInitializing GlobalLocalWrapper (dual-branch)…')
-            print(f'  Global : {global_name}' + (f' ({global_variant})' if global_variant else ''))
-            print(f'  Local  : {local_name or global_name}' +
-                  (f' ({local_variant or global_variant})' if (local_variant or global_variant) else ''))
-
-            self.model = GlobalLocalWrapper(
-                num_classes       = config['model'].get('n_classes', 1),
-                n_channels        = config['model'].get('n_channels', 3),
-                global_model_name = global_name,
-                global_variant    = global_variant,
-                local_model_name  = local_name,
-                local_variant     = local_variant,
-            ).to(self.device)
-            print(f'  → {self.model.description()}')
+        if self.is_sam:
+            # SAM uses its own registry rather than the shared get_model() factory.
+            # The checkpoint path is taken from config['foundation']['sam_checkpoints'].
+            if not SAM_AVAILABLE:
+                raise RuntimeError(
+                    'segment_anything is required for SAM training. '
+                    'Install with: pip install git+https://github.com/facebookresearch/segment-anything.git'
+                )
+            sam_ckpt = (
+                config.get('foundation', {})
+                      .get('sam_checkpoints', {})
+                      .get(variant, f'./checkpoints/sam/sam_{variant}.pth')
+            )
+            print(f'  [SAM] Loading {variant} checkpoint: {sam_ckpt}')
+            self.model = sam_model_registry[variant](checkpoint=sam_ckpt).to(self.device)
+            print(f'  [SAM] Pretrained weights loaded ✓')
         else:
-            model_name = config['model']['name']
-            variant    = config['model'].get('variant', None)
-            print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
             self.model = get_model(
                 model_name = model_name,
                 variant    = variant,
@@ -321,19 +439,41 @@ class UnifiedTrainer:
             ).to(self.device)
 
         # ── Data loaders ───────────────────────────────────────────────────
-        if self.is_global_local:
-            print(f'Loading dual-branch data…')
-            print(f'  Local  (patches) : {config["data"]["local_root"]}')
-            print(f'  Global (resized) : {config["data"]["global_root"]}')
-            self.train_loader, self.val_loader = get_global_local_dataloaders(config)
+        data_root  = config['data']['data_root']
+        batch_size = config['training']['batch_size']
+        n_workers  = config['system']['num_workers']
+        img_size   = config['data']['image_size']
+        augment    = config['data'].get('augment_train', True)
+
+        print(f'Loading data from {data_root}…')
+
+        if self.is_sam:
+            # SAM requires its own preprocessing pipeline (ResizeLongestSide +
+            # SAM normalisation) that is incompatible with the standard
+            # get_training_dataloaders() transforms.  SAMDataset handles this
+            # on-the-fly so no images are pre-loaded into RAM.
+            train_ds = SAMDataset(data_root, 'train', image_size=img_size, augment=augment)
+            val_ds   = SAMDataset(data_root, 'val',   image_size=img_size, augment=False)
+            self.train_loader = DataLoader(
+                train_ds, batch_size=batch_size, shuffle=True,
+                num_workers=n_workers, pin_memory=True, drop_last=False,
+            )
+            self.val_loader = DataLoader(
+                val_ds, batch_size=batch_size, shuffle=False,
+                num_workers=n_workers, pin_memory=True, drop_last=False,
+            )
+            print(f'Loaded {len(train_ds)} samples from train set')
+            print(f'  Image size: {img_size}x{img_size}  (SAM input: 1024×1024)')
+            print(f'  Data augmentation: {"ENABLED" if augment else "DISABLED"}')
+            print(f'Loaded {len(val_ds)} samples from val set')
+            print(f'  Image size: {img_size}x{img_size}')
         else:
-            print(f'Loading data from {config["data"]["data_root"]}…')
             self.train_loader, self.val_loader = get_training_dataloaders(
-                data_dir      = config['data']['data_root'],
-                batch_size    = config['training']['batch_size'],
-                num_workers   = config['system']['num_workers'],
-                augment_train = config['data'].get('augment_train', True),
-                image_size    = config['data']['image_size'],
+                data_dir      = data_root,
+                batch_size    = batch_size,
+                num_workers   = n_workers,
+                augment_train = augment,
+                image_size    = img_size,
             )
 
         # ── Loss ───────────────────────────────────────────────────────────
@@ -356,52 +496,55 @@ class UnifiedTrainer:
         # ── Optimizer ─────────────────────────────────────────────────────
         opt_cfg = config['training']['optimizer']
         base_lr = opt_cfg['learning_rate']
+        wd      = opt_cfg.get('weight_decay', 0.0)
 
-        if self.is_global_local:
-            # Use separate LR groups: backbone at base_lr, fusion at 5× base_lr
-            param_groups = self.model.parameter_groups(
-                base_lr              = base_lr,
-                fusion_lr_multiplier = config['model'].get('global_local', {}).get(
-                    'fusion_lr_multiplier', 5.0
-                ),
-            )
-        elif hasattr(self.model, 'get_params_groups'):
-            # Foundation models (SAM, DINOv2) expose differential LR groups:
-            #   backbone    → base_lr × 0.1  (pretrained ViT, fine-tune gently)
-            #   proj_convs  → base_lr × 1.0  (randomly initialised)
-            #   decoder     → base_lr × 1.0  (randomly initialised)
+        if self.is_sam:
+            # SAM fine-tuning strategy:
+            #   image_encoder  — frozen via no_grad in _forward_sam (NOT in optimizer)
+            #   prompt_encoder — frozen via no_grad in _forward_sam (NOT in optimizer)
+            #   mask_decoder   — fully trainable at base_lr
             #
-            # NOTE — benchmark fairness: this is NOT a hyperparameter advantage.
-            # All model families use the same base_lr, optimizer type, scheduler,
-            # batch size, and loss function defined in base_config.
-            # The backbone sub-group simply prevents the pretrained weights from
-            # being destroyed by a full LR in early epochs — without it the model
-            # would train worse than a random-init baseline, which is not a fair
-            # comparison either. All other training conditions are identical.
-            param_groups = self.model.get_params_groups(base_lr)
-            model_name = config['model']['name']
+            # Only the mask_decoder is given to the optimizer.  This keeps the
+            # effective LR identical to every other model in the benchmark
+            # (base_lr = 1e-4) while preventing gradient updates to the large
+            # pretrained encoder (91M–632M params).
+            param_groups = [
+                {'params': self.model.mask_decoder.parameters(),
+                 'lr': base_lr, 'name': 'mask_decoder'},
+            ]
+            print(f'  [Optimizer] SAM differential LR:')
+            print(f'    image_encoder   FROZEN  (no_grad in forward)  '
+                  f'params={sum(p.numel() for p in self.model.image_encoder.parameters()):,}')
+            print(f'    prompt_encoder  FROZEN  (no_grad in forward)  '
+                  f'params={sum(p.numel() for p in self.model.prompt_encoder.parameters()):,}')
+            print(f'    mask_decoder    LR={base_lr:.1e}  '
+                  f'params={sum(p.numel() for p in self.model.mask_decoder.parameters()):,}')
+        elif hasattr(self.model, 'get_params_groups'):
+            # Foundation / transformer models (DINOv2, SegFormer, etc.) expose
+            # get_params_groups() for differential per-group learning rates.
+            param_groups = self.model.get_params_groups(lr=base_lr)
             print(f'  [Optimizer] Differential LR groups for {model_name}:')
             for i, g in enumerate(param_groups):
-                n    = sum(p.numel() for p in g['params'])
                 name = g.get('name', f'group_{i}')
-                print(f'    {name:15s}  LR={g["lr"]:.1e}  params={n:,}')
+                n_params = sum(p.numel() for p in g['params'])
+                print(f'    {name:<16} LR={g["lr"]:.1e}  params={n_params:,}')
         else:
             param_groups = self.model.parameters()
 
         if opt_cfg['type'] == 'adamw':
             self.optimizer = torch.optim.AdamW(
                 param_groups, lr=base_lr,
-                weight_decay=opt_cfg['weight_decay'], betas=(0.9, 0.999),
+                weight_decay=wd, betas=(0.9, 0.999),
             )
         elif opt_cfg['type'] == 'adam':
             self.optimizer = torch.optim.Adam(
-                param_groups, lr=base_lr, weight_decay=opt_cfg['weight_decay'],
+                param_groups, lr=base_lr, weight_decay=wd,
             )
         elif opt_cfg['type'] == 'sgd':
             self.optimizer = torch.optim.SGD(
                 param_groups, lr=base_lr,
                 momentum=opt_cfg.get('momentum', 0.9),
-                weight_decay=opt_cfg['weight_decay'],
+                weight_decay=wd,
             )
 
         # ── Scheduler ─────────────────────────────────────────────────────
@@ -471,15 +614,6 @@ class UnifiedTrainer:
             self.config['loss']['type'],
             f'img_{self.config["data"].get("image_size", 512)}',
         ]
-        if self.is_global_local:
-            gl_cfg = self.config['model'].get('global_local', {})
-            tags.append('dual_branch')
-            tags.append('global_local')
-            tags.append(gl_cfg.get('global_model_name', 'unet'))
-            local = gl_cfg.get('local_model_name', None)
-            if local and local != gl_cfg.get('global_model_name'):
-                tags.append(f'local_{local}')  # only add tag when asymmetric
-
         wandb.init(
             project = self.config['logging'].get('wandb_project', 'river-segmentation'),
             name    = run_name,
@@ -538,20 +672,26 @@ class UnifiedTrainer:
         print('TRAINING CONFIGURATION')
         print(f'{"="*80}')
         print(f'Device     : {self.device}')
-        print(f'Mode       : {"GlobalLocal dual-branch" if self.is_global_local else "Standard single-input"}')
+        if self.is_sam:
+            print(f'Mode       : SAM fine-tuning (mask_decoder only)')
+        else:
+            print(f'Mode       : Standard single-input')
         print(f'Model      : {self.config["model"]["name"]}', end='')
         if self.config['model'].get('variant'):
             print(f' ({self.config["model"]["variant"]})')
         else:
             print()
-        print(f'Parameters : {sum(p.numel() for p in self.model.parameters()):,}')
+        total_params    = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f'Parameters : {total_params:,}  (trainable: {trainable_params:,})')
+        if self.is_sam:
+            decoder_params = sum(p.numel() for p in self.model.mask_decoder.parameters())
+            print(f'  mask_decoder trainable: {decoder_params:,}')
         print(f'Batch size : {self.config["training"]["batch_size"]}')
         print(f'LR         : {self.config["training"]["optimizer"]["learning_rate"]}')
         print(f'Optimizer  : {self.config["training"]["optimizer"]["type"]}')
         print(f'Scheduler  : {self.config["training"]["scheduler"]["type"]}')
         print(f'Loss       : {self.config["loss"]["type"]}')
-        if self.is_global_local:
-            print(f'Aux weight : {self.aux_weight}')
         print(f'Epochs     : {self.config["training"]["epochs"]}')
         if self.es_patience:
             print(f'Early stop : patience={self.es_patience}, min_delta={self.es_min_delta}')
@@ -582,7 +722,7 @@ class UnifiedTrainer:
             main_loss = self.criterion(main_out, masks)
             loss_dict = {'total': main_loss.item()}
 
-        if aux_out is not None and self.is_global_local:
+        if aux_out is not None:
             g_logits, l_logits = aux_out
             if self.config['loss']['type'] == 'combined':
                 g_loss, _ = self.criterion(g_logits, masks, None)
@@ -605,22 +745,78 @@ class UnifiedTrainer:
     def _forward(self, batch):
         """
         Run the model forward pass and return (main_out, aux_out, masks).
-        Handles both standard and GlobalLocal batch dicts transparently.
+        Handles standard, GlobalLocal, and SAM batch dicts transparently.
         """
-        if self.is_global_local:
-            global_img  = batch['global_image'].to(self.device)
-            local_patch = batch['local_image'].to(self.device)
-            masks       = batch['mask'].to(self.device)
-            main_out, aux_out = self.model(global_img, local_patch, return_aux=True)
-        else:
-            images   = batch['image'].to(self.device)
-            masks    = batch['mask'].to(self.device)
-            outputs  = self.model(images)
-            main_out, aux_out = (
-                outputs if isinstance(outputs, tuple) else (outputs, None)
-            )
+        if self.is_sam:
+            return self._forward_sam(batch)
+        images   = batch['image'].to(self.device)
+        masks    = batch['mask'].to(self.device)
+        outputs  = self.model(images)
+        main_out, aux_out = (outputs if isinstance(outputs, tuple) else (outputs, None))
 
         return main_out, aux_out, masks
+
+    def _forward_sam(self, batch):
+        """
+        SAM-specific forward pass.
+
+        Architecture:
+          image_encoder   (frozen, no_grad) → image embeddings [B, 256, 64, 64]
+          prompt_encoder  (frozen, no_grad) → sparse [B, 0, 256], dense [B, 256, 64, 64]
+          mask_decoder    (trainable)        → low_res_masks [B, 1, 256, 256]
+          postprocess_masks                  → logits [B, 1, H_orig, W_orig]
+
+        The image_encoder and prompt_encoder are kept in no_grad to prevent
+        gradient computation through the large pretrained ViT backbone
+        (91M params for vit_b, 308M for vit_l, 632M for vit_h).
+        Only mask_decoder parameters receive gradient updates.
+
+        Returns (logits, None, masks) matching the (main_out, aux_out, masks)
+        contract of _forward(), so train_epoch / validate are unchanged.
+        """
+        input_tensor  = batch['input_tensor'].to(self.device)   # [B, 3, 1024, 1024]
+        masks         = batch['mask'].to(self.device)            # [B, 1, img_size, img_size]
+        B             = input_tensor.shape[0]
+
+        # All images in a batch are the same spatial size (512×512 → 1024×1024),
+        # so we read sizes from the first sample in the batch.
+        input_size    = tuple(int(x) for x in batch['input_size'][0])    # (H', W')
+        original_size = tuple(int(x) for x in batch['original_size'][0]) # (H_orig, W_orig)
+
+        # ── Frozen components (no gradient computation) ───────────────────
+        with torch.no_grad():
+            image_embeddings = self.model.image_encoder(input_tensor)
+            # [B, 256, 64, 64]
+
+            # prompt_encoder with no prompts returns:
+            #   sparse_embeddings: [1, 0, 256]  (empty — no point/box tokens)
+            #   dense_embeddings : [1, 256, 64, 64]  (no-mask embedding)
+            sparse_emb, dense_emb = self.model.prompt_encoder(
+                points=None, boxes=None, masks=None,
+            )
+            # # Expand from single-sample [1, ...] to full batch [B, ...]
+            # sparse_emb = sparse_emb.expand(B, -1, -1).contiguous()
+            # dense_emb  = dense_emb.expand(B, -1, -1, -1).contiguous()
+
+        # ── Trainable mask decoder ────────────────────────────────────────
+        low_res_masks, _ = self.model.mask_decoder(
+            image_embeddings         = image_embeddings,
+            image_pe                 = self.model.prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings = sparse_emb,
+            dense_prompt_embeddings  = dense_emb,
+            multimask_output         = False,   # single best mask per image
+        )
+        # low_res_masks: [B, 1, 256, 256] — raw logits at decoder resolution
+
+        # ── Upscale to original image resolution ─────────────────────────
+        # postprocess_masks: interpolates to 1024×1024, crops to input_size,
+        # then interpolates to original_size.  Returns LOGITS (not sigmoid).
+        upscaled_masks = self.model.postprocess_masks(
+            low_res_masks, input_size, original_size,
+        )
+        # upscaled_masks: [B, 1, H_orig, W_orig] — logits ready for loss fn
+
+        return upscaled_masks, None, masks
 
     # ── Training epoch ────────────────────────────────────────────────────────
 
@@ -711,7 +907,7 @@ class UnifiedTrainer:
         running_metrics = {'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0,
                            'intersection': 0, 'union': 0}
 
-        sample_images, sample_globals, sample_masks, sample_preds = [], [], [], []
+        sample_images, sample_masks, sample_preds = [], [], []
         log_samples = self.use_wandb and self.config['logging'].get('log_images', False)
         max_samples = 4
 
@@ -741,11 +937,7 @@ class UnifiedTrainer:
 
                 if log_samples and len(sample_images) < max_samples:
                     # Log local patch as the primary image
-                    if self.is_global_local:
-                        sample_images.append(batch['local_image'][0].cpu())
-                        sample_globals.append(batch['global_image'][0].cpu())
-                    else:
-                        sample_images.append(batch['image'][0].cpu())
+                    sample_images.append(batch['image'][0].cpu())
                     sample_masks.append(masks[0].cpu())
                     sample_preds.append(preds[0].cpu())
 
@@ -759,8 +951,7 @@ class UnifiedTrainer:
 
         if log_samples and sample_images:
             self.log_predictions_wandb(
-                sample_images, sample_masks, sample_preds, epoch,
-                global_images=sample_globals if self.is_global_local else None,
+                sample_images, sample_masks, sample_preds, epoch, None,
             )
 
         return avg_loss, {'dice': dice, 'iou': iou, 'precision': precision, 'recall': recall}
@@ -815,7 +1006,7 @@ class UnifiedTrainer:
             'best_val_dice'       : self.best_val_dice,
             'best_val_iou'        : self.best_val_iou,
             'config'              : self.config,
-            'mode'                : 'global_local' if self.is_global_local else 'standard',
+            'mode'                : 'standard',
         }
 
         torch.save(checkpoint, os.path.join(self.checkpoint_dir, 'latest.pth'))
@@ -976,13 +1167,9 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            # Standard mode
             'data_root'    : './dataset/processed_512_resized',
             'image_size'   : 512,
-            'augment_train': True,
-            # GlobalLocal mode (set when name='global_local')
-            'local_root'   : './dataset/processed_512_patch',
-            'global_root'  : './dataset/processed_512_resized',
+            'augment_train': True
         },
         'training': {
             'batch_size': 4,
@@ -1025,168 +1212,26 @@ def get_default_config():
             'output_dir'   : './experiments',
             'log_interval' : 10,
             'save_interval': 10,
-        }
+        },
         # ── Foundation model settings ──────────────────────────────────────────
         # Only read when config['model']['name'] is 'sam' or 'dinov2'.
         # get_model() must forward these to build_sam_segmentation /
         # build_dinov2_segmentation via the config dict.
-        # 'foundation': {
-        #     'pretrained'    : True,   # always True for benchmark validity
-        #     'freeze_encoder': False,  # full fine-tuning (set True for linear probe)
-        #     # SAM checkpoint paths — download from Meta before training:
-        #     #   vit_b: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
-        #     #   vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
-        #     #   vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
-        #     'sam_checkpoints': {
-        #         'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
-        #         'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
-        #         'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth',
-        #     },
-        #     # DINOv2 is auto-downloaded via torch.hub — no checkpoint paths needed.
-        # },
+        'foundation': {
+            'pretrained'    : True,   # always True for benchmark validity
+            'freeze_encoder': False,  # full fine-tuning (set True for linear probe)
+            # SAM checkpoint paths — download from Meta before training:
+            #   vit_b: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+            #   vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
+            #   vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+            'sam_checkpoints': {
+                'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
+                'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
+                'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth',
+            },
+            # DINOv2 is auto-downloaded via torch.hub — no checkpoint paths needed.
+        },
     }
-
-
-
-def get_global_local_config(
-    global_model_name: str = 'unet',
-    global_variant:    str = None,
-    local_model_name:  str = None,   # None → same as global (symmetric)
-    local_variant:     str = None,
-):
-    """
-    Return a config pre-filled for GlobalLocal dual-branch training.
-
-    Args:
-        global_model_name : Architecture for the global (resized) branch.
-        global_variant    : Variant for the global branch (e.g. 'b2', 'tiny').
-        local_model_name  : Architecture for the local (patch) branch.
-                            Defaults to global_model_name (symmetric pairing).
-        local_variant     : Variant for the local branch.
-
-    Examples:
-        # Symmetric — same model on both branches
-        cfg = get_global_local_config('segformer', 'b2')
-
-        # Asymmetric — heavyweight global, lightweight local
-        cfg = get_global_local_config(
-            global_model_name='convnext_upernet', global_variant='base',
-            local_model_name='unet',
-        )
-    """
-    config = get_default_config()
-    config['model']['name']    = 'global_local'
-    config['model']['variant'] = global_variant   # shown in W&B run name
-
-    config['model']['global_local'] = {
-        'global_model_name'   : global_model_name,
-        'global_variant'      : global_variant,
-        'local_model_name'    : local_model_name,   # None → symmetric
-        'local_variant'       : local_variant,
-        'fusion_lr_multiplier': 5.0,
-    }
-
-    config['data']['local_root']  = './dataset/processed_512_patch'
-    config['data']['global_root'] = './dataset/processed_512_resized'
-    config['data']['image_size']  = 512
-    config['loss']['aux_weight']  = 0.4
-    config['training']['batch_size'] = 4   # 2 × 512² per step — monitor VRAM
-    return config
-
-
-def train_all_global_local_models(base_config: dict, symmetric_only: bool = True):
-    """
-    Train GlobalLocalWrapper with every supported model architecture as branches.
-
-    Args:
-        base_config     : Base config dict (data paths, training hyper-params, etc.)
-        symmetric_only  : If True (default), both branches use the same architecture.
-                          If False, also trains a selection of asymmetric pairings.
-
-    Symmetric run matrix (one experiment per model/variant):
-        unet, unetpp, resunetpp, deeplabv3plus, deeplabv3plus_cbam,
-        segformer/b0, segformer/b2, swin_unet/tiny,
-        convnext_upernet/tiny … base, hrnet_ocr/w18 … w48,
-        sam/vit_b … vit_h, dinov2/vit_s … vit_g
-
-    Asymmetric pairings (added when symmetric_only=False):
-        convnext_upernet/base (global) + unet (local)
-        segformer/b2          (global) + unet (local)
-        dinov2/vit_b          (global) + unet (local)
-    """
-    # All models with their variants — same registry as train_all_models()
-    all_models = {
-        'unet'              : [None],
-        'unetpp'            : [None],
-        'resunetpp'         : [None],
-        'deeplabv3plus'     : [None],
-        'deeplabv3plus_cbam': [None],
-        'segformer'         : ['b0', 'b2'],
-        'swin_unet'         : ['tiny'],
-        'convnext_upernet'  : ['tiny', 'small', 'base'],
-        'hrnet_ocr'         : ['w18', 'w32', 'w48'],
-        'sam'               : ['vit_b', 'vit_l', 'vit_h'],
-        'dinov2'            : ['vit_s', 'vit_b', 'vit_l'],
-    }
-
-    experiments = []
-
-    # ── Symmetric pairs ───────────────────────────────────────────────────────
-    for model_name, variants in all_models.items():
-        for variant in variants:
-            experiments.append({
-                'global_model_name': model_name,
-                'global_variant':    variant,
-                'local_model_name':  None,      # symmetric → mirrors global
-                'local_variant':     None,
-                'label':             f'gl_sym_{model_name}' +
-                                     (f'_{variant}' if variant else ''),
-            })
-
-    # ── Asymmetric pairs (heavyweight global + lightweight local) ─────────────
-    if not symmetric_only:
-        asymmetric_pairs = [
-            ('convnext_upernet', 'base', 'unet',     None),
-            ('segformer',        'b2',   'unet',     None),
-            ('dinov2',           'vit_b','unet',     None),
-            ('hrnet_ocr',        'w48',  'segformer','b0'),
-        ]
-        for g_name, g_var, l_name, l_var in asymmetric_pairs:
-            experiments.append({
-                'global_model_name': g_name,
-                'global_variant':    g_var,
-                'local_model_name':  l_name,
-                'local_variant':     l_var,
-                'label':             f'gl_asym_{g_name}_{g_var}__local_{l_name}',
-            })
-
-    # ── Run experiments ───────────────────────────────────────────────────────
-    for exp in experiments:
-        print(f'\n{"="*80}')
-        print(f'GlobalLocal experiment: {exp["label"]}')
-        print(f'{"="*80}\n')
-
-        cfg = get_global_local_config(
-            global_model_name = exp['global_model_name'],
-            global_variant    = exp['global_variant'],
-            local_model_name  = exp['local_model_name'],
-            local_variant     = exp['local_variant'],
-        )
-
-        # Inherit training hyper-params from base_config
-        for key in ['training', 'loss', 'logging', 'system']:
-            if key in base_config:
-                cfg[key] = {**cfg[key], **base_config[key]}
-
-        try:
-            train_single_model(cfg)
-        except Exception as e:
-            print(f'  [ERROR] {exp["label"]} failed: {e}')
-            print('  Skipping to next experiment…')
-        finally:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                import gc; gc.collect()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1206,49 +1251,32 @@ def train_single_model(config: dict):
 
 
 def train_all_models(base_config: dict):
-    """Train all standard models and their variants sequentially."""
-    # all_models = {
-    #     # CNN baselines
-    #     'unet'           : [],
-    #     'unetpp'         : [],
-    #     'resunetpp'      : [],
-    #     'deeplabv3plus'  : [],
-    #     'deeplabv3plus_cbam': [],
-    #     # Transformers
-    #     'segformer'      : ['b0', 'b2'],
-    #     'swin_unet'      : ['tiny'],
-    #     # Hybrid SOTA
-    #     'convnext_upernet': ['tiny', 'small', 'base'],
-    #     'hrnet_ocr'      : ['w18', 'w32', 'w48'],
-    #     # Foundation models
-    #     'sam'            : ['vit_b', 'vit_l', 'vit_h'],
-    #     'dinov2'         : ['vit_s', 'vit_b', 'vit_l'],
-    # }
-
+    """Train all SAM variants (and optionally DINOv2) sequentially."""
     all_models = {
-        # Foundation models
-        # 'dinov2'         : ['vit_s', 'vit_b', 'vit_l'],
-        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
+        # Uncomment dinov2 when ready to train:
+        'dinov2': ['vit_s', 'vit_b', 'vit_l'],
+        # 'sam'    : ['vit_b', 'vit_l', 'vit_h'],
     }
 
+    # Foundation models use early stopping to prevent overfitting on the
+    # 274-image training set given their large parameter counts (91M–632M).
+    # All other benchmark models trained with fixed 100 epochs — this
+    # asymmetry is documented in the paper's training details table.
     FOUNDATION_MODELS = {'sam', 'dinov2'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
             tag = f'{model_name}' + (f' - {variant}' if variant else '')
             print(f'\n{"="*80}\nTraining {tag}\n{"="*80}\n')
+
             config = {**base_config}
-            config['model'] = {**base_config['model'],
-                                'name': model_name, 'variant': variant}
+            config['model'] = {
+                **base_config['model'],
+                'name'   : model_name,
+                'variant': variant,
+            }
 
             if model_name in FOUNDATION_MODELS:
-                # Early stopping for foundation models only.
-                # All other models in this benchmark were trained with fixed
-                # 100 epochs (no early stopping). Foundation models are being
-                # retrained with a corrected implementation, so early stopping
-                # is added here to prevent overfitting on the 274-image
-                # training set given their large parameter counts.
-                # This asymmetry is noted in the paper's training details.
                 config['training'] = {
                     **config['training'],
                     'early_stopping_patience' : 20,
@@ -1256,6 +1284,7 @@ def train_all_models(base_config: dict):
                 }
 
             train_single_model(config)
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -1265,137 +1294,7 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-
-    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
-    # model.train()
-
-    # mask = torch.zeros(2, 1, 512, 512).cuda()
-    # mask[:, :, 100:200, 100:200] = 1.0   # fake water region ~4% of pixels
-
-    # # Check 1: output shape and type
-    # x = torch.randn(2, 3, 512, 512).cuda()
-    # out = model(x)
-    # print(f"Output type  : {type(out)}")
-    # print(f"Output shape : {out.shape if isinstance(out, torch.Tensor) else 'NOT A TENSOR'}")
-
-    # config = get_default_config()
-    # loss_cfg = config['loss']
-    # # Check 2: does the loss actually respond to different predictions?
-    # criterion = get_loss_function(loss_cfg['type'],
-    #             bce_weight      = loss_cfg.get('bce_weight', 1.0),
-    #             dice_weight     = loss_cfg.get('dice_weight', 1.0),
-    #             boundary_weight = loss_cfg.get('boundary_weight', 1.0),
-    #             use_boundary    = loss_cfg.get('use_boundary', False),)  # your combined loss
-    # with torch.no_grad():
-    #     pred_zero  = torch.zeros(2, 1, 512, 512).cuda()        # predicts nothing
-    #     pred_all   = torch.full((2, 1, 512, 512), 5.0).cuda()  # predicts everything
-    #     pred_exact = torch.zeros(2, 1, 512, 512).cuda()
-    #     pred_exact[:, :, 100:200, 100:200] = 5.0               # predicts exactly right
-
-    #     l0 = criterion(pred_zero,  mask, None)
-    #     l1 = criterion(pred_all,   mask, None)
-    #     l2 = criterion(pred_exact, mask, None)
-
-    #     # l0, d0 = criterion(pred_zero,  mask, None)
-    #     # l1, d1 = criterion(pred_exact, mask, None)
-    #     # print("Loss breakdown (predict nothing):", d0)
-    #     # print("Loss breakdown (predict exactly):", d1)
-
-    # print(f"Loss (predict nothing) : {l0[0].item():.4f}")
-    # print(f"Loss (predict all)     : {l1[0].item():.4f}")
-    # print(f"Loss (predict exactly) : {l2[0].item():.4f}")
-
-    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1).cuda()
-    # model.train()
-
-    # x = torch.randn(2, 3, 512, 512).cuda()
-    # mask = torch.zeros(2, 1, 512, 512).cuda()
-    # mask[:, :, 100:150, 100:150] = 1.0  # fake water patch
-
-    # out = model(x)
-    # loss = torch.nn.functional.binary_cross_entropy_with_logits(out, mask)
-    # loss.backward()
-
-    # # Check 1: are backbone gradients actually computed?
-    # backbone_grad = model.encoder.backbone.blocks[0].attn.qkv.weight.grad
-    # decoder_grad  = model.decoder.seg_head[-1].weight.grad
-
-    # print(f"Backbone block[0] qkv grad : {backbone_grad}")
-    # print(f"Decoder head grad          : {decoder_grad}")
-
-    # # Check 2: gradient magnitudes
-    # if backbone_grad is not None:
-    #     print(f"Backbone grad norm : {backbone_grad.norm():.6f}")
-    # if decoder_grad is not None:
-    #     print(f"Decoder grad norm  : {decoder_grad.norm():.6f}")
-
-    # # Check 3: what does get_model actually return?
-    # print(f"\nModel type         : {type(model)}")
-    # print(f"Encoder type       : {type(model.encoder)}")
-    # print(f"Backbone type      : {type(model.encoder.backbone)}")
-
-    # model = get_model('dinov2', 'vit_s', n_channels=3, n_classes=1)
-
-    # # Check 1: is it actually pretrained?
-    # # A pretrained DINOv2 backbone has very specific weight statistics
-    # backbone_mean = model.encoder.backbone.patch_embed.proj.weight.data.mean().item()
-    # print(f"Backbone patch_embed mean: {backbone_mean:.6f}")
-    # # Pretrained: ~0.000xxx (small but structured)
-    # # Random init: ~0.0 (Xavier/kaiming centered exactly at 0)
-
-    # # Check 2: does it produce non-trivial output on a dummy input?
-    # x = torch.randn(2, 3, 512, 512)
-    # with torch.no_grad():
-    #     out = model(x)
-    #     probs = torch.sigmoid(out)
-    # print(f"Output prob range: {probs.min():.4f} – {probs.max():.4f}")
-    # # Pretrained + working decoder: wide spread, e.g. 0.1 – 0.9
-    # # Random init or broken: all ~0.5 (saturated) or very narrow range
-
-    # # Check 3: confirm no sigmoid in the model output path
-    # print(out.min().item(), out.max().item())
-
-    # ── Option A: Single standard model ──────────────────────────────────────
-    # config = get_default_config()
-    # config['model']['name']    = 'unet'
-    # config['model']['variant'] = None
-    # config['data']['data_root'] = './dataset/processed_512_patch'
-    # config['data']['image_size'] = 512
-    # config['training']['batch_size'] = 4
-    # config['training']['epochs']     = 100
-    # config['logging']['use_wandb']   = True
-    # train_single_model(config)
-
-    # ── Option B: GlobalLocal — symmetric (same arch on both branches) ────────
-    # gl_config = get_global_local_config(
-    #     global_model_name = 'unet',   # ← change to any supported model
-    #     global_variant    = None,
-    #     # local_model_name / local_variant omitted → symmetric (mirrors global)
-    # )
-    # gl_config['training']['epochs']     = 100
-    # gl_config['training']['batch_size'] = 4
-    # gl_config['logging']['use_wandb']   = True
-    # gl_config['logging']['wandb_notes'] = (
-    #     'GlobalLocal dual-branch: resized global context + sliced local detail. '
-    #     'Attention-gated fusion. Deep supervision on both branches.'
-    # )
-    # train_single_model(gl_config)
-
-    # ── Option C: GlobalLocal — asymmetric (different arch per branch) ────────
-    # gl_asym = get_global_local_config(
-    #     global_model_name = 'convnext_upernet', global_variant = 'base',
-    #     local_model_name  = 'unet',             local_variant  = None,
-    # )
-    # train_single_model(gl_asym)
-
-    # ── Option D: All standard models ─────────────────────────────────────────
     train_all_models(get_default_config())
-
-    # ── Option E: All GlobalLocal symmetric experiments ───────────────────────
-    # train_all_global_local_models(get_default_config(), symmetric_only=True)
-
-    # ── Option F: All GlobalLocal including asymmetric pairings ───────────────
-    # train_all_global_local_models(get_default_config(), symmetric_only=False)
 
 
 if __name__ == '__main__':
