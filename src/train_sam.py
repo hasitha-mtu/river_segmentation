@@ -96,156 +96,6 @@ def summarize_category_counts(metrics_list, metric_name, labels):
         print(f"{label}: {count} ({percentage:.2f}%)")
     print()
 
-if __name__ == '__main__':
-  model_type = "vit_b"  # or "vit_l", "vit_h", etc.
-
-  # Path to the pretrained SAM checkpoint file (.pth)
-  checkpoint = "./checkpoints/best_model_epoch5.pth" 
-  # === Load Model ===
-  # Use the model registry to initialize the correct SAM architecture
-  sam_model = sam_model_registry[model_type](checkpoint=checkpoint)
-
-  # Move model to GPU if available, otherwise CPU
-  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-  sam_model.to(device)
-
-  # === Set Model to Training Mode ===
-  # Use `model.train()` when fine-tuning or training the model
-  # For inference, use `model.eval()` instead
-  predictor_tuned = SamPredictor(sam_model)
-  sam_model.eval()
-
-  # Set the paths to your test images and labels
-  test_image_dir = "dataset/processed_512_resized/test/images"   # <-- Update this path
-  test_label_dir = "dataset/processed_512_resized/test/masks"   # <-- Update this path
-
-  desired_size=(512, 512)
-
-  # === Load and Sort Test Image Paths ===
-  # Collect all test image files (e.g., .jpg)
-  all_test_image_paths = sorted(glob(os.path.join(test_image_dir, "*.jpg")))
-  test_total_images = len(all_test_image_paths)
-  print(f"Total Number of Test Images: {test_total_images}")
-
-  # === Load and Sort Test Label Paths ===
-  # Collect all test label files (e.g., .png masks)
-  all_test_label_paths = sorted(glob(os.path.join(test_label_dir, "*.png")))
-  test_total_labels = len(all_test_label_paths)
-  print(f"Total Number of Test Labels: {test_total_labels}")
-
-  # === Match Image and Label Paths ===
-  # These lists can now be used for DataLoader or evaluation
-  Test_image_paths = all_test_image_paths[:test_total_images]
-  Test_label_paths = all_test_label_paths[:test_total_labels]
-
-  # Optional: Print a few samples to verify
-  print("Sample test image path:", Test_image_paths[0] if Test_image_paths else "No images found")
-  print("Sample test label path:", Test_label_paths[0] if Test_label_paths else "No labels found")
-
-  # Dictionary to hold ground truth binary masks for test data
-  ground_truth_test_masks = {}
-
-  # === Load and Process Each Test Mask ===
-  for idx in range(len(Test_label_paths)):
-      # Read label image in color (3-channel); expected mask is in the red channel
-      gt_color = cv2.imread(Test_label_paths[idx])
-
-      # Extract the red channel only and convert to binary mask
-      # Note: OpenCV loads in BGR, so red is at index 2
-      binary_mask = (gt_color[:, :, 2] > 0).astype(np.float32)
-
-      # Resize if specified
-      if desired_size is not None:
-          binary_mask = cv2.resize(binary_mask, desired_size, interpolation=cv2.INTER_NEAREST)
-
-      # Store in dictionary
-      ground_truth_test_masks[idx] = binary_mask
-
-  print(f"Loaded {len(ground_truth_test_masks)} ground truth test masks.")
-
-  
-  # === Inference with SAM Predictor on Test Set ===
-  masks_tuned_list = {}   # Stores predicted binary masks
-  images_tuned_list = {}  # Stores input images used during inference
-
-  for idx in range(len(Test_image_paths)):
-      # === Load and Preprocess Image ===
-      image = cv2.imread(Test_image_paths[idx])
-      image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-      if desired_size is not None:
-          image_rgb = cv2.resize(image_rgb, desired_size, interpolation=cv2.INTER_LINEAR)
-
-      # === Set the image for SAM predictor ===
-      predictor_tuned.set_image(image_rgb)
-
-      # === Predict segmentation mask ===
-      masks_tuned, _, _ = predictor_tuned.predict(
-          point_coords=None,
-          box=None,
-          multimask_output=False,  # Only get the most confident mask
-      )
-
-      # === Extract and post-process the first predicted mask ===
-      mask_np = masks_tuned[0, :, :]                 # Select first mask
-      binary_mask = (mask_np > 0).astype(np.float32) # Convert to float binary mask
-
-      # === Store results ===
-      images_tuned_list[idx] = image_rgb
-      masks_tuned_list[idx] = binary_mask
-
-  print(f"Inference complete on {len(Test_image_paths)} test images.")
-
-  import matplotlib.pyplot as plt
-  import numpy as np
-
-  # === Grid Configuration ===
-  n_images = len(images_tuned_list)
-  n_cols = 4  # Number of images per row
-  n_rows = (n_images // n_cols) + (n_images % n_cols > 0)  # Auto-calculate rows
-
-  # Create a figure with subplots
-  fig, axs = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows))
-
-  # If axs is 1D (e.g., only 1 row), convert to 2D for consistency
-  axs = np.atleast_2d(axs)
-
-  # === Iterate and Plot ===
-  for i in range(n_rows):
-      for j in range(n_cols):
-          index = i * n_cols + j
-          ax = axs[i, j]
-
-          if index < n_images:
-              # Display the RGB image
-              ax.imshow(images_tuned_list[index], interpolation='none')
-
-              # Generate a blue mask overlay (R=0, G=0, B=1) for binary mask = 1
-              mask = masks_tuned_list[index]
-              blue_mask_rgb = np.zeros((*mask.shape, 3), dtype=np.float32)
-              blue_mask_rgb[..., 2] = mask  # Blue channel
-
-              # Overlay the mask with transparency
-              ax.imshow(blue_mask_rgb, alpha=0.5)
-
-          # Remove axes ticks
-          ax.axis('off')
-
-  # === Final Layout ===
-  plt.subplots_adjust(wspace=0.03, hspace=0.03)
-  plt.tight_layout()
-  plt.show()
-
-  # === Run All ===
-  metrics_list = compute_all_metrics(masks_tuned_list, ground_truth_test_masks)
-
-  summarize_category_counts(metrics_list, 'IoU',        ['Excellent', 'Good', 'Fair', 'Poor', 'Unacceptable'])
-  summarize_category_counts(metrics_list, 'Precision',  ['Excellent', 'Good', 'Moderate', 'Fail'])
-  summarize_category_counts(metrics_list, 'Kappa',      ['Excellent', 'Good', 'Moderate', 'Fail'])
-  summarize_category_counts(metrics_list, 'F-Score',    ['Excellent', 'Good', 'Moderate', 'Fail'])
-  summarize_category_counts(metrics_list, 'Recall',     ['Excellent', 'Good', 'Moderate', 'Fail'])
-
-
 def train():
   # === CONFIGURATION ===
   # Set the path to your training images and labels
@@ -409,7 +259,7 @@ def train():
   lr = 1e-5                     # Learning rate for optimizer
   wd = 0                        # Weight decay (L2 regularization)
   batch_size = 32              # Number of samples per batch
-  num_epochs = 5               # Total number of training epochs
+  num_epochs = 1               # Total number of training epochs
 
   # === Optimizer Setup ===
   # Only the mask decoder parameters are being fine-tuned (others are frozen)
@@ -503,10 +353,10 @@ def train():
           gt_tensor = torch.from_numpy(gt_mask.astype(np.float32)).unsqueeze(0).unsqueeze(0).to(device)
 
           # Loss + Backprop
-          loss = loss_fn(binary_mask, gt_tensor)
+          loss, loss_dict = loss_fn(binary_mask, gt_tensor)
           optimizer.zero_grad()
-          loss.requires_grad = True
-          loss.backward()
+          # loss.requires_grad = True
+          # loss.backward()
           optimizer.step()
 
           batch_losses.append(loss.item())
@@ -567,7 +417,11 @@ def train():
               pred_mask = torch.as_tensor((masks_tuned > 0)).float().unsqueeze(0).to(device)
               gt_val_mask = torch.from_numpy(ground_truth_masksv[s].astype(np.float32)).unsqueeze(0).unsqueeze(0).to(device)
 
-              val_loss += loss_fn(pred_mask, gt_val_mask).item()
+              val_loss, val_loss_dict = loss_fn(pred_mask, gt_val_mask)
+
+              val_loss += val_loss.item()
+
+              # val_loss += loss_fn(pred_mask, gt_val_mask).item()
               val_accuracy += calculate_accuracy(pred_mask, gt_val_mask)
 
       val_loss /= num_val_examples
@@ -598,3 +452,157 @@ def train():
       torch.cuda.empty_cache()
   print(type(ground_truth_masksv))
   print(ground_truth_masksv.keys() if isinstance(ground_truth_masksv, dict) else len(ground_truth_masksv))
+
+
+if __name__ == '__main__':
+  train()
+
+  model_type = "vit_b"  # or "vit_l", "vit_h", etc.
+
+  # Path to the pretrained SAM checkpoint file (.pth)
+  checkpoint = "./checkpoints/best_model_epoch5.pth" 
+  # === Load Model ===
+  # Use the model registry to initialize the correct SAM architecture
+  sam_model = sam_model_registry[model_type](checkpoint=checkpoint)
+
+  # Move model to GPU if available, otherwise CPU
+  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  sam_model.to(device)
+
+  # === Set Model to Training Mode ===
+  # Use `model.train()` when fine-tuning or training the model
+  # For inference, use `model.eval()` instead
+  predictor_tuned = SamPredictor(sam_model)
+  sam_model.eval()
+
+  # Set the paths to your test images and labels
+  test_image_dir = "dataset/processed_512_resized/test/images"   # <-- Update this path
+  test_label_dir = "dataset/processed_512_resized/test/masks"   # <-- Update this path
+
+  desired_size=(512, 512)
+
+  # === Load and Sort Test Image Paths ===
+  # Collect all test image files (e.g., .jpg)
+  all_test_image_paths = sorted(glob(os.path.join(test_image_dir, "*.jpg")))
+  test_total_images = len(all_test_image_paths)
+  print(f"Total Number of Test Images: {test_total_images}")
+
+  # === Load and Sort Test Label Paths ===
+  # Collect all test label files (e.g., .png masks)
+  all_test_label_paths = sorted(glob(os.path.join(test_label_dir, "*.png")))
+  test_total_labels = len(all_test_label_paths)
+  print(f"Total Number of Test Labels: {test_total_labels}")
+
+  # === Match Image and Label Paths ===
+  # These lists can now be used for DataLoader or evaluation
+  Test_image_paths = all_test_image_paths[:test_total_images]
+  Test_label_paths = all_test_label_paths[:test_total_labels]
+
+  # Optional: Print a few samples to verify
+  print("Sample test image path:", Test_image_paths[0] if Test_image_paths else "No images found")
+  print("Sample test label path:", Test_label_paths[0] if Test_label_paths else "No labels found")
+
+  # Dictionary to hold ground truth binary masks for test data
+  ground_truth_test_masks = {}
+
+  # === Load and Process Each Test Mask ===
+  for idx in range(len(Test_label_paths)):
+      # Read label image in color (3-channel); expected mask is in the red channel
+      gt_color = cv2.imread(Test_label_paths[idx])
+
+      # Extract the red channel only and convert to binary mask
+      # Note: OpenCV loads in BGR, so red is at index 2
+      binary_mask = (gt_color[:, :, 2] > 0).astype(np.float32)
+
+      # Resize if specified
+      if desired_size is not None:
+          binary_mask = cv2.resize(binary_mask, desired_size, interpolation=cv2.INTER_NEAREST)
+
+      # Store in dictionary
+      ground_truth_test_masks[idx] = binary_mask
+
+  print(f"Loaded {len(ground_truth_test_masks)} ground truth test masks.")
+
+  
+  # === Inference with SAM Predictor on Test Set ===
+  masks_tuned_list = {}   # Stores predicted binary masks
+  images_tuned_list = {}  # Stores input images used during inference
+
+  for idx in range(len(Test_image_paths)):
+      # === Load and Preprocess Image ===
+      image = cv2.imread(Test_image_paths[idx])
+      image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+      if desired_size is not None:
+          image_rgb = cv2.resize(image_rgb, desired_size, interpolation=cv2.INTER_LINEAR)
+
+      # === Set the image for SAM predictor ===
+      predictor_tuned.set_image(image_rgb)
+
+      # === Predict segmentation mask ===
+      masks_tuned, _, _ = predictor_tuned.predict(
+          point_coords=None,
+          box=None,
+          multimask_output=False,  # Only get the most confident mask
+      )
+
+      # === Extract and post-process the first predicted mask ===
+      mask_np = masks_tuned[0, :, :]                 # Select first mask
+      binary_mask = (mask_np > 0).astype(np.float32) # Convert to float binary mask
+
+      # === Store results ===
+      images_tuned_list[idx] = image_rgb
+      masks_tuned_list[idx] = binary_mask
+
+  print(f"Inference complete on {len(Test_image_paths)} test images.")
+
+  import matplotlib.pyplot as plt
+  import numpy as np
+
+  # === Grid Configuration ===
+  n_images = len(images_tuned_list)
+  n_cols = 4  # Number of images per row
+  n_rows = (n_images // n_cols) + (n_images % n_cols > 0)  # Auto-calculate rows
+
+  # Create a figure with subplots
+  fig, axs = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows))
+
+  # If axs is 1D (e.g., only 1 row), convert to 2D for consistency
+  axs = np.atleast_2d(axs)
+
+  # === Iterate and Plot ===
+  for i in range(n_rows):
+      for j in range(n_cols):
+          index = i * n_cols + j
+          ax = axs[i, j]
+
+          if index < n_images:
+              # Display the RGB image
+              ax.imshow(images_tuned_list[index], interpolation='none')
+
+              # Generate a blue mask overlay (R=0, G=0, B=1) for binary mask = 1
+              mask = masks_tuned_list[index]
+              blue_mask_rgb = np.zeros((*mask.shape, 3), dtype=np.float32)
+              blue_mask_rgb[..., 2] = mask  # Blue channel
+
+              # Overlay the mask with transparency
+              ax.imshow(blue_mask_rgb, alpha=0.5)
+
+          # Remove axes ticks
+          ax.axis('off')
+
+  # === Final Layout ===
+  plt.subplots_adjust(wspace=0.03, hspace=0.03)
+  plt.tight_layout()
+  plt.show()
+
+  # === Run All ===
+  metrics_list = compute_all_metrics(masks_tuned_list, ground_truth_test_masks)
+
+  summarize_category_counts(metrics_list, 'IoU',        ['Excellent', 'Good', 'Fair', 'Poor', 'Unacceptable'])
+  summarize_category_counts(metrics_list, 'Precision',  ['Excellent', 'Good', 'Moderate', 'Fail'])
+  summarize_category_counts(metrics_list, 'Kappa',      ['Excellent', 'Good', 'Moderate', 'Fail'])
+  summarize_category_counts(metrics_list, 'F-Score',    ['Excellent', 'Good', 'Moderate', 'Fail'])
+  summarize_category_counts(metrics_list, 'Recall',     ['Excellent', 'Good', 'Moderate', 'Fail'])
+
+
