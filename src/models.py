@@ -3,7 +3,7 @@ Transformer-based Segmentation Models for River Water Detection
 RGB Input Only - SAM, DINOv2
 """
 
-from foundation_models.sam.model import build_sam_segmentation
+from foundation_models.sam.model import build_sam_segmentation, build_sam_fpn_segmentation
 from foundation_models.dinov2.model import build_dinov2_segmentation
 from hybrid_sota.convnext_upernet.model import build_convnext_upernet
 from hybrid_sota.hrnet_ocr.model import build_hrnet_ocr
@@ -22,6 +22,11 @@ def get_model(model_name, variant, n_channels=3, n_classes=1):
     """
     if model_name == 'sam':
         return build_sam_segmentation(
+            variant=variant, 
+            in_channels=n_channels, 
+            num_classes=n_classes)
+    if model_name == 'sam_fpn':
+        return build_sam_fpn_segmentation(
             variant=variant, 
             in_channels=n_channels, 
             num_classes=n_classes)
@@ -65,6 +70,8 @@ def get_model_varient(model_name):
         model_name: 'sam', or 'dinov2' or ...
     """
     if model_name == 'sam':
+        return ['vit_b', 'vit_l', 'vit_h']
+    elif model_name == 'sam_fpn':
         return ['vit_b', 'vit_l', 'vit_h']
     elif model_name == 'dinov2':
         return ['vit_s', 'vit_b', 'vit_l', 'vit_g']

@@ -237,7 +237,7 @@ class UnifiedTrainer:
             sam_ckpt = (
                 config.get('foundation', {})
                       .get('sam_checkpoints', {})
-                      .get(variant, f'./checkpoints/sam/sam_{variant}.pth')
+                      .get(variant, f'./checkpoints/sam_fpn/sam_{variant}.pth')
             )
             print(f'  [SAM] Loading {variant} checkpoint: {sam_ckpt}')
             self.model = sam_model_registry[variant](checkpoint=sam_ckpt).to(self.device)
@@ -968,12 +968,12 @@ def train_all_models(base_config: dict):
     all_models = {
         # Uncomment when ready:
         # 'dinov2': ['vit_s', 'vit_b', 'vit_l'],
-        'sam': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_fpn': ['vit_b', 'vit_l', 'vit_h'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran
     # fixed 100 epochs.  This asymmetry is documented in the paper.
-    FOUNDATION_MODELS = {'sam', 'dinov2'}
+    FOUNDATION_MODELS = {'sam_fpn', 'dinov2'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
