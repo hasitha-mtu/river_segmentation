@@ -289,19 +289,114 @@ class SAMFineTuned(nn.Module):
             masks = F.interpolate(masks, size=original_size, mode='bilinear', align_corners=False)
         
         return masks
+
+class SAM_FPN_Decoder(nn.Module):
+    def __init__(self, encoder_embed_dim=768, out_channels=1):
+        super().__init__()
+        # 1. We keep 256 as our internal "Working Depth"
+        self.internal_dims = 256 
+        
+        self.latlayer1 = nn.Conv2d(encoder_embed_dim, self.internal_dims, 1)
+        self.latlayer2 = nn.Conv2d(encoder_embed_dim, self.internal_dims, 1)
+        self.latlayer3 = nn.Conv2d(encoder_embed_dim, self.internal_dims, 1)
+        
+        self.up_scale2 = nn.ConvTranspose2d(self.internal_dims, self.internal_dims, 2, 2)
+        self.up_scale1 = nn.ConvTranspose2d(self.internal_dims, self.internal_dims, 4, 4)
+
+        # 2. Only the very last layer uses out_channels (num_classes)
+        self.predict = nn.Sequential(
+            nn.Conv2d(self.internal_dims, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, out_channels, kernel_size=1) # This is where '1' or 'num_classes' goes
+        )
+
+    def forward(self, features: List[torch.Tensor]):
+        # features[0] is early (more spatial detail), features[2] is late (more semantic)
+        f1, f2, f3 = features 
+
+        # Map to 256 channels
+        p3 = self.latlayer3(f3) # 64x64
+        p2 = self.latlayer2(f2) # 64x64
+        p1 = self.latlayer1(f1) # 64x64
+
+        # Upsample and merge
+        # We upsample the early layers to provide higher resolution detail
+        m3 = p3 
+        m2 = p2 + m3
+        m1 = p1 + m2
+        
+        # Final upsampling to original 1024x1024 resolution
+        # Combining features for the prediction
+        feat = self.up_scale1(m1) # This brings us to 256x256
+        out = F.interpolate(self.predict(feat), scale_factor=4, mode='bilinear', align_corners=False)
+        
+        return out
+
+class SAMEncoderDecoderUpdated(nn.Module):
+    def __init__(
+        self,
+        sam_checkpoint: str,
+        model_type: str = 'vit_b',
+        freeze_encoder: bool = True,
+        out_channels: int = 1
+    ):
+        super().__init__()
+        # Load SAM
+        sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+        self.encoder = sam.image_encoder
+        
+        if freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+        
+        # Determine embedding dimension based on variant
+        embed_dim = self.encoder.embed_dim
+        
+        # New FPN Decoder
+        self.decoder = SAM_FPN_Decoder(encoder_embed_dim=embed_dim, out_channels=out_channels)
+
+    def forward(self, x):
+        # SAM expects 1024x1024
+        if x.shape[-2:] != (1024, 1024):
+            x = F.interpolate(x, size=(1024, 1024), mode='bilinear', align_corners=False)
+
+        # Extract intermediate features
+        # We manually run the blocks to catch intermediate outputs
+        # This is the "hook-less" way to get multi-level features from SAM
+        hidden_states = []
+        
+        # Indices of blocks to extract (e.g., for Vit-B with 12 blocks)
+        # We take 4, 8, and 12
+        extract_blocks = [3, 7, 11] 
+        
+        z = self.encoder.patch_embed(x)
+        if self.encoder.pos_embed is not None:
+            z = z + self.encoder.pos_embed
+
+        for i, blk in enumerate(self.encoder.blocks):
+            z = blk(z)
+            if i in extract_blocks:
+                # Permute from [B, L, C] to [B, C, H, W] for Conv layers
+                # SAM ViT output is (Batch, 64, 64, Dim) -> (Batch, Dim, 64, 64)
+                hidden_states.append(z.permute(0, 3, 1, 2))
+
+        # Pass the pyramid of features to our FPN decoder
+        output = self.decoder(hidden_states)
+        return output
     
 def build_sam_segmentation(variant, in_channels, num_classes):
-    if variant=='vit_b':
-        checkpoint_path = './checkpoints/sam/sam_vit_b_01ec64.pth'
-    elif variant=='vit_l':
-        checkpoint_path = './checkpoints/sam/sam_vit_l_0b3195.pth'
-    elif variant=='vit_h':
-        checkpoint_path = './checkpoints/sam/sam_vit_h_4b8939.pth'
-    return SAMEncoderDecoder(
+    paths = {
+        'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
+        'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
+        'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth'
+    }
+    checkpoint_path = paths.get(variant)
+    return SAMEncoderDecoderUpdated(
             sam_checkpoint=checkpoint_path,
             model_type=variant,
             freeze_encoder=True,
-            decoder_channels=256
+            decoder_channels=num_classes
         )
     # return SAMFineTuned(
     #         sam_checkpoint=checkpoint_path,
