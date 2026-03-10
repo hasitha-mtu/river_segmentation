@@ -479,7 +479,6 @@ class UnifiedTrainer:
                 running_metrics['union']        += (preds + masks_binary).clamp(0, 1).sum().item()
 
                 if log_samples and len(sample_images) < max_samples:
-                    # For SAM batches use input_tensor; standard batches use image
                     img_key = 'pixel_values' if self.is_sam else 'image'
                     sample_images.append(batch[img_key][0].cpu())
                     sample_masks.append(masks[0].cpu())
