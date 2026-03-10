@@ -480,7 +480,7 @@ class UnifiedTrainer:
 
                 if log_samples and len(sample_images) < max_samples:
                     # For SAM batches use input_tensor; standard batches use image
-                    img_key = 'input_tensor' if self.is_sam else 'image'
+                    img_key = 'pixel_values' if self.is_sam else 'image'
                     sample_images.append(batch[img_key][0].cpu())
                     sample_masks.append(masks[0].cpu())
                     sample_preds.append(preds[0].cpu())
