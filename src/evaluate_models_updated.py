@@ -490,20 +490,6 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device) -> n
         print(f'  [SAM] Rebuilding {variant} from: {sam_ckpt}')
         model = sam_model_registry[variant](checkpoint=sam_ckpt)
         model.load_state_dict(ckpt['model_state_dict'])
-
-    elif model_name == 'global_local':
-        from wrapper import GlobalLocalWrapper
-        gl = config['model']['global_local']
-        model = GlobalLocalWrapper(
-            num_classes       = n_classes,
-            n_channels        = n_channels,
-            global_model_name = gl['global_model_name'],
-            global_variant    = gl.get('global_variant'),
-            local_model_name  = gl.get('local_model_name'),
-            local_variant     = gl.get('local_variant'),
-        )
-        model.load_state_dict(ckpt['model_state_dict'])
-
     else:
         model = get_model(
             model_name = model_name,
@@ -553,7 +539,7 @@ def model_family(config: dict) -> str:
         return 'Transformer'
     if name in ('convnext_upernet', 'hrnet_ocr'):
         return 'Hybrid SOTA'
-    if name in ('sam', 'dinov2'):
+    if name in ('sam', 'sam_fpn', 'dinov2'):
         return 'Foundation'
     return 'Other'
 
@@ -738,13 +724,6 @@ def save_prediction_overlays(
             if is_sam:
                 outputs      = _forward_sam_eval(model, batch, device)
                 imgs_for_vis = None   # SAM: load from image_path (see below)
-            elif is_global_local:
-                outputs = model(
-                    batch['global_image'].to(device),
-                    batch['local_image'].to(device),
-                    return_aux=False,
-                )
-                imgs_for_vis = batch['local_image']
             else:
                 outputs = model(batch['image'].to(device))
                 imgs_for_vis = batch['image']
