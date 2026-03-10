@@ -17,30 +17,27 @@ to prevent overfitting on the 274-image training set.
 
 import os
 import json
-from pathlib import Path
+# from pathlib import Path
 
 import numpy as np
 import torch
-import torch.backends.cudnn as cudnn
-from torch.utils.data import Dataset, DataLoader
+# import torch.backends.cudnn as cudnn
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import wandb
-
-from models import get_model
+import torch.nn.functional as F
+from transformers import SamModel
+# from models import get_model
 from src.utils.losses import get_loss_function
-from src.dataset.dataset_loader import get_training_dataloaders
+# from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
-
-# SAM-specific imports — only required when training SAM variants.
-try:
-    from segment_anything import sam_model_registry
-    from segment_anything.utils.transforms import ResizeLongestSide
-    SAM_AVAILABLE = True
-except ImportError:
-    SAM_AVAILABLE = False
-    print('[WARN] segment_anything not found — SAM training will not be available.')
-
+from transformers import SamProcessor
+from segment_anything import sam_model_registry
+# from segment_anything.utils.transforms import ResizeLongestSide
+# import cv2
+# from PIL import Image
+from src.foundation_models.sam.dataset import SAMDataset, create_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SAM Dataset
@@ -50,136 +47,6 @@ except ImportError:
 _SAM_PIXEL_MEAN = torch.tensor([123.675, 116.28,  103.53 ]).view(3, 1, 1)
 _SAM_PIXEL_STD  = torch.tensor([ 58.395,  57.12,   57.375]).view(3, 1, 1)
 
-
-def _sam_preprocess(x: torch.Tensor, img_size: int = 1024) -> torch.Tensor:
-    """
-    Replicate sam_model.preprocess() without requiring the model object.
-    Input  : float tensor [3, H, W], pixel values 0-255
-    Output : float tensor [3, img_size, img_size], normalised + zero-padded
-    """
-    x = (x.float() - _SAM_PIXEL_MEAN) / _SAM_PIXEL_STD
-    h, w = x.shape[-2:]
-    pad_h = img_size - h
-    pad_w = img_size - w
-    x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h))
-    return x
-
-
-class SAMDataset(Dataset):
-    """
-    On-the-fly dataset for SAM fine-tuning.
-
-    Loads images from the same processed_512_resized dataset used by every
-    other model.  Adds SAM-specific preprocessing on top:
-      1. Load image → resize to image_size × image_size
-      2. Optional augmentation (flips, 90° rotations)
-      3. ResizeLongestSide(1024) — square 512 input → 1024×1024
-      4. SAM normalisation + zero-padding to 1024×1024
-
-    Returned batch dict keys
-    ------------------------
-    input_tensor   : FloatTensor [3, 1024, 1024]  — SAM-preprocessed image
-    input_size     : LongTensor  [2]              — (H', W') after ResizeLongestSide
-    original_size  : LongTensor  [2]              — (image_size, image_size)
-    mask           : FloatTensor [1, image_size, image_size]  — binary 0/1
-    image_name     : str
-    """
-
-    SAM_IMG_SIZE = 1024
-
-    def __init__(
-        self,
-        data_root : str,
-        split     : str,
-        image_size: int  = 512,
-        augment   : bool = False,
-    ):
-        import cv2 as _cv2
-        self._cv2       = _cv2
-        self.image_size = image_size
-        self.augment    = augment
-
-        img_dir  = Path(data_root) / split / 'images'
-        mask_dir = Path(data_root) / split / 'masks'
-
-        img_paths = sorted(img_dir.glob('*.jpg')) + sorted(img_dir.glob('*.png'))
-        self.samples: list[tuple[Path, Path]] = []
-        skipped = 0
-
-        for img_path in img_paths:
-            mask_path = mask_dir / f'{img_path.stem}.png'
-            if not mask_path.exists():
-                mask_path = mask_dir / f'{img_path.stem}.jpg'
-            if not mask_path.exists():
-                skipped += 1
-                continue
-            self.samples.append((img_path, mask_path))
-
-        if skipped:
-            print(f'  [SAMDataset/{split}] Skipped {skipped} images (no matching mask).')
-        print(f'  [SAMDataset/{split}] {len(self.samples)} samples loaded.')
-
-        if not SAM_AVAILABLE:
-            raise RuntimeError(
-                'segment_anything is not installed. '
-                'Run: pip install git+https://github.com/facebookresearch/segment-anything.git'
-            )
-        self.resize_transform = ResizeLongestSide(self.SAM_IMG_SIZE)
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int) -> dict:
-        img_path, mask_path = self.samples[idx]
-
-        image = self._cv2.imread(str(img_path))
-        image = self._cv2.cvtColor(image, self._cv2.COLOR_BGR2RGB)
-        image = self._cv2.resize(
-            image, (self.image_size, self.image_size),
-            interpolation=self._cv2.INTER_LINEAR,
-        )
-
-        mask = self._cv2.imread(str(mask_path), self._cv2.IMREAD_GRAYSCALE)
-        mask = self._cv2.resize(
-            mask, (self.image_size, self.image_size),
-            interpolation=self._cv2.INTER_NEAREST,
-        )
-        mask = (mask > 127).astype(np.float32)
-
-        if self.augment:
-            image, mask = self._augment(image, mask)
-
-        original_size = (image.shape[0], image.shape[1])
-
-        resized_image = self.resize_transform.apply_image(image)
-        input_size    = (resized_image.shape[0], resized_image.shape[1])
-
-        img_tensor   = torch.as_tensor(resized_image).permute(2, 0, 1).float()
-        input_tensor = _sam_preprocess(img_tensor, self.SAM_IMG_SIZE)
-
-        mask_tensor = torch.from_numpy(mask).unsqueeze(0)
-
-        return {
-            'input_tensor' : input_tensor,
-            'input_size'   : torch.tensor(input_size,    dtype=torch.long),
-            'original_size': torch.tensor(original_size, dtype=torch.long),
-            'mask'         : mask_tensor,
-            'image_name'   : img_path.stem,
-        }
-
-    def _augment(self, image: np.ndarray, mask: np.ndarray):
-        import random
-        if random.random() > 0.5:
-            image = np.fliplr(image).copy()
-            mask  = np.fliplr(mask).copy()
-        if random.random() > 0.5:
-            image = np.flipud(image).copy()
-            mask  = np.flipud(mask).copy()
-        k = random.randint(0, 3)
-        if k > 0:
-            image = np.rot90(image, k).copy()
-            mask  = np.rot90(mask,  k).copy()
-        return image, mask
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,32 +90,29 @@ class UnifiedTrainer:
         # ── Mode flag ─────────────────────────────────────────────────────
         model_name  = config['model']['name']
         variant     = config['model'].get('variant', None)
-        self.is_sam = (model_name == 'sam')
+        self.is_sam = (model_name == 'sam' or model_name == 'sam_fpn' or model_name == 'sam_finetuned')
 
         # ── Model ─────────────────────────────────────────────────────────
         print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
 
-        if self.is_sam:
-            if not SAM_AVAILABLE:
-                raise RuntimeError(
-                    'segment_anything is required for SAM training. '
-                    'Install with: pip install git+https://github.com/facebookresearch/segment-anything.git'
-                )
-            sam_ckpt = (
-                config.get('foundation', {})
-                      .get('sam_checkpoints', {})
-                      .get(variant, f'./checkpoints/sam_fpn/sam_{variant}.pth')
-            )
-            print(f'  [SAM] Loading {variant} checkpoint: {sam_ckpt}')
-            self.model = sam_model_registry[variant](checkpoint=sam_ckpt).to(self.device)
-            print(f'  [SAM] Pretrained weights loaded ✓')
-        else:
-            self.model = get_model(
-                model_name = model_name,
-                variant    = variant,
-                n_channels = config['model'].get('n_channels', 3),
-                n_classes  = config['model'].get('n_classes', 1),
-            ).to(self.device)
+        # sam_ckpt = (
+        #         config.get('foundation', {})
+        #               .get('sam_checkpoints', {})
+        #               .get(variant, f'./checkpoints/sam_fpn/sam_{variant}.pth')
+        #     )
+        # print(f'  [SAM] Loading {variant} checkpoint: {sam_ckpt}')
+        # self.model = sam_model_registry[variant](checkpoint=sam_ckpt).to(self.device)
+        # print(f'  [SAM] Pretrained weights loaded ✓')
+
+        model_tags = {
+        'vit_b': 'facebook/sam-vit-base',
+        'vit_l': 'facebook/sam-vit-large',
+        'vit_h': 'facebook/sam-vit-huge'
+        }
+        model_tag = model_tags.get(variant)
+
+        self.model = SamModel.from_pretrained(model_tag)
+        self.model.to(self.device)
 
         # ── Data loaders ───────────────────────────────────────────────────
         data_root  = config['data']['data_root']
@@ -259,29 +123,37 @@ class UnifiedTrainer:
 
         print(f'Loading data from {data_root}…')
 
-        if self.is_sam:
-            # SAM requires its own preprocessing (ResizeLongestSide + SAM
-            # normalisation) that differs from the standard pipeline.
-            train_ds = SAMDataset(data_root, 'train', image_size=img_size, augment=augment)
-            val_ds   = SAMDataset(data_root, 'val',   image_size=img_size, augment=False)
-            self.train_loader = DataLoader(
-                train_ds, batch_size=batch_size, shuffle=True,
-                num_workers=n_workers, pin_memory=True, drop_last=False,
-            )
-            self.val_loader = DataLoader(
-                val_ds, batch_size=batch_size, shuffle=False,
-                num_workers=n_workers, pin_memory=True, drop_last=False,
-            )
-            print(f'  train: {len(train_ds)} samples  |  val: {len(val_ds)} samples')
-            print(f'  Image size: {img_size}×{img_size}  →  SAM input: 1024×1024')
-        else:
-            self.train_loader, self.val_loader = get_training_dataloaders(
-                data_dir      = data_root,
-                batch_size    = batch_size,
-                num_workers   = n_workers,
-                augment_train = augment,
-                image_size    = img_size,
-            )
+        
+        print(f'SAM processor tag for loading data: {model_tag}')
+        processor = SamProcessor.from_pretrained(model_tag)
+
+        train_ds = create_dataset(data_root, 'train')
+        train_dataset = SAMDataset(dataset=train_ds, processor=processor)
+        self.train_loader = DataLoader(train_dataset, 
+                                       batch_size=batch_size, 
+                                       num_workers=n_workers, 
+                                       shuffle=True)
+
+        val_ds = create_dataset(data_root, 'val')
+        val_dataset = SAMDataset(dataset=val_ds, processor=processor)
+        self.val_loader = DataLoader(val_dataset, 
+                                     batch_size=batch_size, 
+                                     num_workers=n_workers, 
+                                     shuffle=True)
+
+
+        # self.train_loader = DataLoader(
+        #     train_ds, batch_size=batch_size, shuffle=True,
+        #     num_workers=n_workers, drop_last=False,
+        # )
+        # self.val_loader = DataLoader(
+        #     val_ds, batch_size=batch_size, shuffle=False,
+        #     num_workers=n_workers, drop_last=False,
+        # )
+        print(f'  train: {len(train_ds)} samples  |  val: {len(val_ds)} samples')
+        print(f'  Image size: {img_size}×{img_size}  →  SAM input: 1024×1024')
+
+        print(f'Train batch_size: {self.train_loader.batch_size}')
 
         # ── Loss ───────────────────────────────────────────────────────────
         loss_cfg = config['loss']
@@ -302,29 +174,17 @@ class UnifiedTrainer:
         base_lr = opt_cfg['learning_rate']
         wd      = opt_cfg.get('weight_decay', 0.0)
 
-        if self.is_sam:
-            # Only the mask_decoder is optimised — image_encoder and
-            # prompt_encoder are kept frozen via no_grad in _forward_sam().
-            param_groups = [
+        param_groups = [
                 {'params': self.model.mask_decoder.parameters(),
                  'lr': base_lr, 'name': 'mask_decoder'},
-            ]
-            print(f'  [Optimizer] SAM: mask_decoder only  LR={base_lr:.1e}')
-            print(f'    image_encoder  FROZEN  '
-                  f'params={sum(p.numel() for p in self.model.image_encoder.parameters()):,}')
-            print(f'    prompt_encoder FROZEN  '
-                  f'params={sum(p.numel() for p in self.model.prompt_encoder.parameters()):,}')
-            print(f'    mask_decoder   trainable  '
-                  f'params={sum(p.numel() for p in self.model.mask_decoder.parameters()):,}')
-        elif hasattr(self.model, 'get_params_groups'):
-            param_groups = self.model.get_params_groups(lr=base_lr)
-            print(f'  [Optimizer] Differential LR groups:')
-            for i, g in enumerate(param_groups):
-                name = g.get('name', f'group_{i}')
-                n_p  = sum(p.numel() for p in g['params'])
-                print(f'    {name:<16} LR={g["lr"]:.1e}  params={n_p:,}')
-        else:
-            param_groups = self.model.parameters()
+        ]
+        # print(f'  [Optimizer] SAM: mask_decoder only  LR={base_lr:.1e}')
+        # print(f'    image_encoder  FROZEN  '
+        #           f'params={sum(p.numel() for p in self.model.image_encoder.parameters()):,}')
+        # print(f'    prompt_encoder FROZEN  '
+        #           f'params={sum(p.numel() for p in self.model.prompt_encoder.parameters()):,}')
+        # print(f'    mask_decoder   trainable  '
+        #           f'params={sum(p.numel() for p in self.model.mask_decoder.parameters()):,}')
 
         if opt_cfg['type'] == 'adamw':
             self.optimizer = torch.optim.AdamW(
@@ -494,76 +354,21 @@ class UnifiedTrainer:
     # ── Forward pass ─────────────────────────────────────────────────────────
 
     def _forward(self, batch):
-        """
-        Run the model and return (main_out, masks).
-        Dispatches to _forward_sam() for SAM, otherwise standard pipeline.
-        """
-        if self.is_sam:
-            return self._forward_sam(batch)
+        outputs = self.model(pixel_values=batch["pixel_values"].to(self.device),
+                            input_boxes=batch["input_boxes"].to(self.device),
+                            multimask_output=False)
 
-        images  = batch['image'].to(self.device)
-        masks   = batch['mask'].to(self.device)
-        outputs = self.model(images)
-        # Some models return (main, aux) tuples — take main only
-        main_out = outputs[0] if isinstance(outputs, tuple) else outputs
-        return main_out, masks
-
-    def _forward_sam(self, batch):
-        """
-        SAM-specific forward pass.
-
-        Why per-image loop (not vectorised batch):
-        -------------------------------------------
-        SAM's mask_decoder.predict_masks() calls:
-            src = torch.repeat_interleave(image_embedding, tokens.shape[0], dim=0)
-        where tokens.shape[0] should be the number of prompt tokens per image
-        (1 for promptless inference).  Passing a batched sparse_emb [B, N, C]
-        makes tokens.shape[0] = B, producing a [B*B, ...] tensor and crashing.
-
-        Fix: run image_encoder on the full batch (expensive ViT, worth batching),
-        then loop prompt_encoder + mask_decoder per image (tiny, negligible overhead).
-
-        Returns (logits [B,1,H,W], masks [B,1,H,W]).
-        """
-        input_tensor  = batch['input_tensor'].to(self.device)   # [B, 3, 1024, 1024]
-        masks         = batch['mask'].to(self.device)            # [B, 1, img_size, img_size]
-        B             = input_tensor.shape[0]
-
-        input_size    = tuple(int(x) for x in batch['input_size'][0])
-        original_size = tuple(int(x) for x in batch['original_size'][0])
-
-        # ── image_encoder — batched, frozen ──────────────────────────────
-        with torch.no_grad():
-            image_embeddings = self.model.image_encoder(input_tensor)
-            # [B, 256, 64, 64]
-
-        # ── prompt_encoder + mask_decoder — per image ────────────────────
-        upscaled_list = []
-        for i in range(B):
-            emb_i = image_embeddings[i].unsqueeze(0)  # [1, 256, 64, 64]
-
-            with torch.no_grad():
-                sparse_emb, dense_emb = self.model.prompt_encoder(
-                    points=None, boxes=None, masks=None,
-                )
-                # sparse_emb: [1, 0, 256]   dense_emb: [1, 256, 64, 64]
-
-            low_res_i, _ = self.model.mask_decoder(
-                image_embeddings         = emb_i,
-                image_pe                 = self.model.prompt_encoder.get_dense_pe(),
-                sparse_prompt_embeddings = sparse_emb,
-                dense_prompt_embeddings  = dense_emb,
-                multimask_output         = False,
-            )
-            # low_res_i: [1, 1, 256, 256]
-
-            upscaled_i = self.model.postprocess_masks(
-                low_res_i, input_size, original_size,
-            )
-            # upscaled_i: [1, 1, H_orig, W_orig]
-            upscaled_list.append(upscaled_i)
-
-        return torch.cat(upscaled_list, dim=0), masks   # [B,1,H,W], [B,1,H,W]
+        predicted_masks = outputs.pred_masks
+        predicted_masks = predicted_masks.squeeze(1).squeeze(1)
+        predicted_masks = F.interpolate(
+                predicted_masks.unsqueeze(1), # interpolate expects [B, C, H, W], so add '1' channel
+                size=(512, 512), 
+                mode='bilinear', 
+                align_corners=False
+                ).squeeze(1) # Remove the channel dimension again if doing Binary Loss
+        
+        masks   = batch["ground_truth_mask"].float().to(self.device)
+        return predicted_masks, masks
 
     # ── Loss ─────────────────────────────────────────────────────────────────
 
@@ -592,7 +397,6 @@ class UnifiedTrainer:
 
         for batch_idx, batch in enumerate(pbar):
             self.optimizer.zero_grad()
-
             main_out, masks = self._forward(batch)
             loss, loss_dict = self._compute_loss(main_out, masks)
 
@@ -964,16 +768,14 @@ def train_single_model(config: dict):
 
 
 def train_all_models(base_config: dict):
-    """Train all SAM variants (and optionally DINOv2) sequentially."""
+    """Train all SAM variants sequentially."""
     all_models = {
-        # Uncomment when ready:
-        # 'dinov2': ['vit_s', 'vit_b', 'vit_l'],
-        'sam_fpn': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran
     # fixed 100 epochs.  This asymmetry is documented in the paper.
-    FOUNDATION_MODELS = {'sam_fpn', 'dinov2'}
+    FOUNDATION_MODELS = {'sam', 'sam_fpn', 'sam_finetuned'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
