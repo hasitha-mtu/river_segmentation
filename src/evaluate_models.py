@@ -356,24 +356,13 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device) -> n
     n_channels = config['model'].get('n_channels', 3)
     n_classes  = config['model'].get('n_classes',  1)
 
-    if model_name == 'global_local':
-        gl = config['model']['global_local']
-        model = GlobalLocalWrapper(
-            num_classes       = n_classes,
-            n_channels        = n_channels,
-            global_model_name = gl['global_model_name'],
-            global_variant    = gl.get('global_variant'),
-            local_model_name  = gl.get('local_model_name'),
-            local_variant     = gl.get('local_variant'),
-        )
-    else:
-        model = get_model(
+    model = get_model(
             model_name = model_name,
             variant    = variant,
             n_channels = n_channels,
             n_classes  = n_classes,
         )
-
+        
     model.load_state_dict(ckpt['model_state_dict'])
     model.to(device)
     model.eval()
@@ -415,7 +404,7 @@ def model_family(config: dict) -> str:
         return 'Transformer'
     if name in ('convnext_upernet', 'hrnet_ocr'):
         return 'Hybrid SOTA'
-    if name in ('sam', 'dinov2'):
+    if name in ('sam', 'sam_fpn', 'dinov2'):
         return 'Foundation'
     return 'Other'
 
@@ -452,13 +441,8 @@ def evaluate_model(
 
         t0 = time.perf_counter()
 
-        if is_global_local:
-            global_img  = batch['global_image'].to(device)
-            local_patch = batch['local_image'].to(device)
-            outputs = model(global_img, local_patch, return_aux=False)
-        else:
-            images  = batch['image'].to(device)
-            outputs = model(images)
+        images  = batch['image'].to(device)
+        outputs = model(images)
 
         # Some models return a tuple (logits, aux); take the main output
         if isinstance(outputs, tuple):

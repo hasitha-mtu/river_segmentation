@@ -727,8 +727,6 @@ def save_prediction_overlays(
 
     IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
     IMAGENET_STD  = np.array([0.229, 0.224, 0.225])
-    SAM_MEAN      = np.array([123.675, 116.28,  103.53]) / 255.0
-    SAM_STD       = np.array([ 58.395,  57.12,   57.375]) / 255.0
 
     with torch.no_grad():
         for batch in loader:
@@ -739,7 +737,7 @@ def save_prediction_overlays(
 
             if is_sam:
                 outputs      = _forward_sam_eval(model, batch, device)
-                imgs_for_vis = batch['input_tensor']   # [B, 3, 1024, 1024]
+                imgs_for_vis = None   # SAM: load from image_path (see below)
             elif is_global_local:
                 outputs = model(
                     batch['global_image'].to(device),
@@ -760,15 +758,28 @@ def save_prediction_overlays(
 
             img_paths = batch.get('image_path', [''] * masks.shape[0])
             for i in range(min(len(img_paths), n_samples - saved)):
-                img_np = imgs_for_vis[i].permute(1, 2, 0).numpy()
-
                 if is_sam:
-                    # Denormalise from SAM stats and crop away zero-padding
-                    img_np   = (img_np * SAM_STD + SAM_MEAN).clip(0, 1)
-                    orig_h   = int(batch['original_size'][i][0])
-                    orig_w   = int(batch['original_size'][i][1])
-                    img_np   = img_np[:orig_h, :orig_w]
+                    # ── SAM: load the original image directly from disk ───────
+                    # Do NOT use batch['input_tensor'] for visualisation.
+                    #
+                    # Why: SAMTestDataset applies ResizeLongestSide(1024) to the
+                    # image_size×image_size source image before storing it in
+                    # input_tensor.  For a square 512×512 source, this scales
+                    # both sides 2× to 1024×1024.  Cropping input_tensor to
+                    # [:orig_h, :orig_w] = [:512, :512] then yields only the
+                    # top-left quarter of the 2× upscaled image — appearing
+                    # "zoomed in" relative to the 512×512 mask/prediction.
+                    #
+                    # The correct image for overlay is the 512×512 source image,
+                    # which is what mask and prediction both reference.
+                    orig_h = int(batch['original_size'][i][0])
+                    orig_w = int(batch['original_size'][i][1])
+                    img_pil = Image.open(img_paths[i]).convert('RGB').resize(
+                        (orig_w, orig_h), Image.BILINEAR
+                    )
+                    img_np = np.array(img_pil).astype(np.float32) / 255.0
                 else:
+                    img_np = imgs_for_vis[i].permute(1, 2, 0).numpy()
                     img_np = (img_np * IMAGENET_STD + IMAGENET_MEAN).clip(0, 1)
 
                 mask_np = masks[i, 0].cpu().numpy()
