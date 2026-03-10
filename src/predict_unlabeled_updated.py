@@ -400,7 +400,7 @@ def model_family(config: dict) -> str:
         return 'CNN Baseline'
     if name in ('segformer', 'swin_unet'):  return 'Transformer'
     if name in ('convnext_upernet', 'hrnet_ocr'): return 'Hybrid SOTA'
-    if name in ('sam', 'dinov2'):       return 'Foundation'
+    if name in ('sam', 'sam_fpn', 'dinov2'):       return 'Foundation'
     return 'Other'
 
 
