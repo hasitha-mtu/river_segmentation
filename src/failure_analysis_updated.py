@@ -116,10 +116,43 @@ except ImportError:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pearson_r(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+# def pearson_r(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+#     """
+#     Pearson correlation coefficient and two-tailed p-value.
+#     Returns (r, p). Uses scipy if available, otherwise numpy.
+#     """
+#     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+#     mask = np.isfinite(x) & np.isfinite(y)
+#     x, y = x[mask], y[mask]
+#     if len(x) < 3:
+#         return float('nan'), float('nan')
+#     if SCIPY_AVAILABLE:
+#         r, p = scipy_stats.pearsonr(x, y)
+#         return float(r), float(p)
+#     # numpy fallback (no p-value)
+#     r = float(np.corrcoef(x, y)[0, 1])
+#     return r, float('nan')
+
+def spearman_r(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
     """
-    Pearson correlation coefficient and two-tailed p-value.
-    Returns (r, p). Uses scipy if available, otherwise numpy.
+    Spearman rank correlation coefficient and two-tailed p-value.
+    Returns (rho, p). Requires scipy; falls back to Pearson if unavailable.
+
+    Spearman's rho is the primary correlation statistic used in this
+    script because:
+      - Both gt_ratio and consensus Dice fail Shapiro-Wilk normality
+        (Pearson's normality assumption is violated).
+      - The coverage-Dice relationship is log-linear, not linear
+        (R²=0.887 log-linear vs 0.598 linear; slope ratio 19x between
+        lowest and highest coverage thirds).
+      - Residuals from the linear fit are heteroscedastic
+        (low-coverage residual std 0.209 vs mid-coverage 0.060).
+      - Spearman rho correctly captures the monotonic association
+        without requiring linearity or normality.
+
+    Note: spatial autocorrelation between consecutive UAV frames
+    (Durbin-Watson=0.43, lag-1 r=0.89) means the reported p-value
+    is a lower bound; rho should be treated as a descriptive statistic.
     """
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -127,11 +160,13 @@ def pearson_r(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
     if len(x) < 3:
         return float('nan'), float('nan')
     if SCIPY_AVAILABLE:
-        r, p = scipy_stats.pearsonr(x, y)
-        return float(r), float(p)
-    # numpy fallback (no p-value)
-    r = float(np.corrcoef(x, y)[0, 1])
-    return r, float('nan')
+        rho, p = scipy_stats.spearmanr(x, y)
+        return float(rho), float(p)
+    # Fallback: Pearson on ranks (equivalent to Spearman)
+    rx = np.argsort(np.argsort(x)).astype(float)
+    ry = np.argsort(np.argsort(y)).astype(float)
+    rho = float(np.corrcoef(rx, ry)[0, 1])
+    return rho, float('nan')
 
 
 def load_mask_as_binary(path: Path) -> np.ndarray:
@@ -551,12 +586,22 @@ def _plot_coverage_performance(
         'convnext_upernet_tiny': 'Hybrid SOTA',
         'segformer_b2': 'Transformer',
         'segformer_b0': 'Transformer',
-        'swin_unet_tiny': 'Transformer'
+        'swin_unet_tiny': 'Transformer',
+        'sam_vit_b': 'Foundation',
+        'sam_vit_l': 'Foundation',
+        'sam_vit_h': 'Foundation',
+        'sam_fpn_vit_b': 'Foundation',
+        'sam_fpn_vit_l': 'Foundation',
+        'sam_fpn_vit_h': 'Foundation',
+        'dinov2_vit_b': 'Foundation',
+        'dinov2_vit_s': 'Foundation',
+        'dinov2_vit_l': 'Foundation',
     }
     family_colours = {
         'CNN Baseline': '#2196F3',
-        'Hybrid SOTA' : '#FF9800',
-        'Transformer' : '#9C27B0'
+        'Hybrid SOTA' : "#056C26",
+        'Transformer' : '#9C27B0',
+        'Foundation'  : "#E93D12",
     }
 
     x = np.arange(len(bin_labels))
@@ -587,7 +632,7 @@ def _plot_coverage_performance(
 
     ax.set_xlabel('Ground-truth water coverage bin', fontsize=12)
     ax.set_ylabel('Mean Dice (per bin)', fontsize=12)
-    ax.set_title('Coverage–Performance Gradient across Architecture Families', fontsize=12)
+    # ax.set_title('Coverage–Performance Gradient across Architecture Families', y=-0.3, fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(bin_labels, rotation=30, ha='right', fontsize=12)
     ax.set_ylim(0, 1.0)
@@ -827,28 +872,30 @@ def analyse_image_statistics(
         x_arr = np.array(x_vals, dtype=float)
 
         corr_row: dict = {'statistic': stat}
-        all_r: list[float] = []
+        all_rho: list[float] = []
 
         for model in models:
             y_arr = np.array([row.get(f'dice_{model}', float('nan'))
                                for row in stat_rows], dtype=float)
-            r, p = pearson_r(x_arr, y_arr)
-            corr_row[f'r_{model}'] = round(r, 4) if np.isfinite(r) else ''
-            corr_row[f'p_{model}'] = round(p, 4) if np.isfinite(p) else ''
-            if np.isfinite(r):
-                all_r.append(r)
+            rho, p = spearman_r(x_arr, y_arr)
+            corr_row[f'rho_{model}'] = round(rho, 4) if np.isfinite(rho) else ''
+            corr_row[f'p_{model}']   = round(p,   4) if np.isfinite(p)   else ''
+            if np.isfinite(rho):
+                all_rho.append(rho)
 
-        corr_row['mean_r_across_models'] = round(float(np.mean(all_r)), 4) if all_r else ''
-        corr_row['std_r_across_models']  = round(float(np.std(all_r)),  4) if all_r else ''
+        corr_row['mean_rho_across_models'] = round(float(np.mean(all_rho)), 4) if all_rho else ''
+        corr_row['std_rho_across_models']  = round(float(np.std(all_rho)),  4) if all_rho else ''
         corr_rows.append(corr_row)
 
     save_csv(corr_rows, output_dir / 'image_stats_correlations.csv')
 
     # Print summary table
     lines = [
-        "\n  CORRELATION SUMMARY (Pearson r with per-image Dice, averaged across models)",
-        f"  {'Statistic':<26} {'Mean r':>8}  {'Std r':>7}  {'Interpretation'}",
-        "  " + "-"*75,
+        "\n  CORRELATION SUMMARY (Spearman rho with per-image Dice, averaged across models)",
+        "  Note: rho reported as descriptive statistic; p-values are lower bounds",
+        "        due to spatial autocorrelation between consecutive UAV frames.",
+        f"  {'Statistic':<26} {'Mean rho':>10}  {'Std rho':>9}  {'Interpretation'}",
+        "  " + "-"*80,
     ]
     stat_descriptions = {
         'gt_ratio'         : 'Ground-truth water fraction (primary driver)',
@@ -865,11 +912,11 @@ def analyse_image_statistics(
         'laplacian_var'    : 'Laplacian variance (texture/edge complexity)',
     }
     for row in sorted(corr_rows,
-                       key=lambda r: -abs(float(r['mean_r_across_models']) or 0)):
-        mean_r = row['mean_r_across_models']
-        std_r  = row['std_r_across_models']
-        desc   = stat_descriptions.get(row['statistic'], '')
-        lines.append(f"  {row['statistic']:<26} {mean_r:>8}  {std_r:>7}  {desc}")
+                       key=lambda r: -abs(float(r['mean_rho_across_models']) or 0)):
+        mean_rho = row['mean_rho_across_models']
+        std_rho  = row['std_rho_across_models']
+        desc     = stat_descriptions.get(row['statistic'], '')
+        lines.append(f"  {row['statistic']:<26} {mean_rho:>10}  {std_rho:>9}  {desc}")
     print("\n".join(lines))
 
     if MATPLOTLIB_AVAILABLE:
@@ -878,25 +925,25 @@ def analyse_image_statistics(
 
 
 def _plot_stat_correlations(corr_rows, stat_descriptions, output_dir):
-    """Bar chart of mean Pearson r per image statistic."""
+    """Bar chart of mean Spearman rho per image statistic."""
     stats_sorted = sorted(
         corr_rows,
-        key=lambda r: float(r['mean_r_across_models'] or 0)
+        key=lambda r: float(r['mean_rho_across_models'] or 0)
     )
-    labels = [r['statistic'] for r in stats_sorted]
-    mean_rs = [float(r['mean_r_across_models'] or 0) for r in stats_sorted]
-    std_rs  = [float(r['std_r_across_models']  or 0) for r in stats_sorted]
+    labels   = [r['statistic'] for r in stats_sorted]
+    mean_rhos = [float(r['mean_rho_across_models'] or 0) for r in stats_sorted]
+    std_rhos  = [float(r['std_rho_across_models']  or 0) for r in stats_sorted]
 
-    colours = ['#F44336' if v < 0 else '#2196F3' for v in mean_rs]
+    colours = ['#F44336' if v < 0 else '#2196F3' for v in mean_rhos]
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    bars = ax.barh(range(len(labels)), mean_rs, xerr=std_rs,
+    bars = ax.barh(range(len(labels)), mean_rhos, xerr=std_rhos,
                    color=colours, alpha=0.8, error_kw={'linewidth': 1.0, 'capsize': 3})
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels, fontsize=9)
     ax.axvline(0, color='black', linewidth=0.8)
-    ax.set_xlabel("Mean Pearson r with per-image Dice (across all models)", fontsize=10)
-    ax.set_title("Image Statistics vs. Segmentation Dice — Correlation Summary", fontsize=12)
+    ax.set_xlabel("Mean Spearman ρ with per-image Dice (across all models)", fontsize=10)
+    ax.set_title("Image Statistics vs. Segmentation Dice — Spearman Rank Correlation", fontsize=12)
     ax.grid(axis='x', linestyle=':', alpha=0.4)
     fig.tight_layout()
     out = output_dir / 'fig_stat_correlations.png'
@@ -921,19 +968,21 @@ def _plot_coverage_scatter(stat_rows, models, output_dir):
         valid = np.isfinite(xs_arr) & np.isfinite(ys_arr)
         ax.scatter(xs_arr[valid], ys_arr[valid],
                    color=colour, alpha=0.6, s=30, edgecolors='white', linewidths=0.3)
-        # Trend line
+        # Trend line (log-linear fit — relationship is log-linear, not linear)
         if valid.sum() > 2:
-            m_, b_ = np.polyfit(xs_arr[valid], ys_arr[valid], 1)
-            xfit = np.linspace(xs_arr[valid].min(), xs_arr[valid].max(), 50)
-            ax.plot(xfit, m_ * xfit + b_, color='black', linewidth=1.2, linestyle='--')
-            r, _ = pearson_r(xs_arr[valid], ys_arr[valid])
-            ax.text(0.05, 0.05, f'r = {r:.3f}', transform=ax.transAxes,
+            log_x = np.log(np.maximum(xs_arr[valid], 1e-9))
+            m_, b_ = np.polyfit(log_x, ys_arr[valid], 1)
+            xfit = np.linspace(xs_arr[valid].min(), xs_arr[valid].max(), 200)
+            ax.plot(xfit, m_ * np.log(np.maximum(xfit, 1e-9)) + b_,
+                    color='black', linewidth=1.2, linestyle='--')
+            rho, _ = spearman_r(xs_arr[valid], ys_arr[valid])
+            ax.text(0.05, 0.05, f'ρ = {rho:.3f}', transform=ax.transAxes,
                     fontsize=9, color='black')
         ax.set_title(model, fontsize=9)
         ax.set_xlabel('gt_ratio', fontsize=8)
         ax.set_ylim(0, 1)
     axes[0].set_ylabel('Dice', fontsize=10)
-    fig.suptitle('Ground-truth Coverage vs. Dice (test images)', fontsize=12)
+    fig.suptitle('Ground-truth Coverage vs. Dice — Spearman ρ (test images)', fontsize=12)
     fig.tight_layout()
     out = output_dir / 'fig_coverage_scatter.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
