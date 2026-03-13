@@ -695,7 +695,7 @@ def get_default_config():
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 2,
+            'epochs'    : 100,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
