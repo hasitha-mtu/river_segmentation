@@ -90,6 +90,7 @@ class SAMDataset(Dataset):
         # FIX 1: Convert nested lists back to NumPy arrays to prevent processor recursion error
         image = np.array(item["image"], dtype=np.uint8)
         ground_truth_mask = np.array(item["label"], dtype=np.uint8)
+        ground_truth_mask = (ground_truth_mask > 0).astype(np.float32)
 
         # Get bounding box prompt
         prompt = get_bounding_box(ground_truth_mask)

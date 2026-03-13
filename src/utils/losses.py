@@ -126,40 +126,13 @@ class CombinedLoss(nn.Module):
         self.dice_weight = dice_weight
         self.boundary_weight = boundary_weight
         self.use_boundary = use_boundary
+        print(f'CombinedLoss| use_boundary: {use_boundary} ')
         
         self.bce = nn.BCEWithLogitsLoss()
         self.dice = DiceLoss()
         if use_boundary:
             self.boundary = BoundaryLoss()
         self.aux_weight = aux_weight
-
-    # def forward(self, predictions, targets):
-    #     print(f'CombinedLoss|forward|predictions type: {type(predictions)}')
-    #     print(f'CombinedLoss|forward|predictions length: {len(predictions)}')
-    #     print(f'CombinedLoss|forward|predictions[0]: {predictions[0]}')
-    #     print(f'CombinedLoss|forward|predictions[1]: {predictions[1]}')
-    #     print(f'CombinedLoss|forward|targets type: {type(targets)}')
-    #     bce_loss = self.bce(predictions, targets)
-    #     dice_loss = self.dice(predictions, targets)
-        
-    #     total_loss = self.bce_weight * bce_loss + self.dice_weight * dice_loss
-        
-    #     if self.use_boundary:
-    #         boundary_loss = self.boundary(predictions, targets)
-    #         total_loss += self.boundary_weight * boundary_loss
-    #         return total_loss, {
-    #             'bce': bce_loss.item(),
-    #             'dice': dice_loss.item(),
-    #             'boundary': boundary_loss.item(),
-    #             'total': total_loss.item()
-    #         }
-    #     else:
-    #         return total_loss, {
-    #             'bce': bce_loss.item(),
-    #             'dice': dice_loss.item(),
-    #             'total': total_loss.item()
-    #         }
-    
 
     def forward(
             self,
@@ -182,7 +155,9 @@ class CombinedLoss(nn.Module):
         
         # Compute main losses
         bce = self.bce(predictions, targets)
+        print(f'CombinedLoss| bce: {bce} ')
         dice = self.dice(predictions, targets)
+        print(f'CombinedLoss| dice: {dice} ')
         
         loss_dict['bce'] = bce.item()
         loss_dict['dice'] = dice.item()
