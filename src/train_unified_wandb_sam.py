@@ -695,7 +695,7 @@ def get_default_config():
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 100,
+            'epochs'    : 2,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -768,8 +768,12 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     """Train all SAM variants sequentially."""
+    # all_models = {
+    #     'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
+    # }
+
     all_models = {
-        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_finetuned': ['vit_b'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran
