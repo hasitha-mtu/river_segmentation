@@ -768,12 +768,8 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     """Train all SAM variants sequentially."""
-    # all_models = {
-    #     'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
-    # }
-
     all_models = {
-        'sam_finetuned': ['vit_b'],
+        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran
