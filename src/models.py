@@ -3,12 +3,12 @@ Transformer-based Segmentation Models for River Water Detection
 RGB Input Only - SAM, DINOv2
 """
 
-from foundation_models.sam.model import build_sam_segmentation, build_sam_fpn_segmentation
-from foundation_models.dinov2.model import build_dinov2_segmentation
-from hybrid_sota.convnext_upernet.model import build_convnext_upernet
-from hybrid_sota.hrnet_ocr.model import build_hrnet_ocr
-from transformers.models import get_model as get_transformer_model
-from cnn_baselines.models import get_model as get_cnn_model
+from src.foundation_models.sam.model import build_sam_segmentation, build_sam_fpn_segmentation
+from src.foundation_models.dinov2.model import build_dinov2_segmentation
+from src.hybrid_sota.convnext_upernet.model import build_convnext_upernet
+from src.hybrid_sota.hrnet_ocr.model import build_hrnet_ocr
+from src.transformers.models import get_model as get_transformer_model
+from src.cnn_baselines.models import get_model as get_cnn_model
 
 def get_model(model_name, variant, n_channels=3, n_classes=1):
     """
