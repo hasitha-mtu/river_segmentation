@@ -9,16 +9,39 @@ def create_test_results_per_image_plots(file_path, output_dir):
     df = pd.read_csv(file_path)
 
     # 2. Define Model-to-Family Mapping for high-level grouping
+    # family_map = {
+    #     'deeplabv3plus': 'CNN Baseline', 'deeplabv3plus_cbam': 'CNN Baseline', 
+    #     'unet': 'CNN Baseline', 'unetpp': 'CNN Baseline', 'resunetpp': 'CNN Baseline',
+    #     'hrnet_ocr_w18': 'Hybrid SOTA', 'hrnet_ocr_w32': 'Hybrid SOTA', 'hrnet_ocr_w48': 'Hybrid SOTA',
+    #     'convnext_upernet_base': 'Hybrid SOTA', 'convnext_upernet_small': 'Hybrid SOTA', 'convnext_upernet_tiny': 'Hybrid SOTA',
+    #     'segformer_b0': 'Transformer', 'segformer_b2': 'Transformer', 'swin_unet_tiny': 'Transformer',
+    #     'dinov2_vit_b': 'Foundation', 'dinov2_vit_l': 'Foundation', 'dinov2_vit_s': 'Foundation',
+    #     'sam_vit_b': 'Foundation', 'sam_vit_h': 'Foundation', 'sam_vit_l': 'Foundation',
+    #     'sam_fpn_vit_b': 'Foundation', 'sam_fpn_vit_h': 'Foundation', 'sam_fpn_vit_l': 'Foundation'
+    # }
+
+    # family_map = {
+    #     'deeplabv3plus': 'DeepLab (CNN)', 'deeplabv3plus_cbam': 'DeepLab (CNN)', 
+    #     'unet': 'UNET (CNN)', 'unetpp': 'UNET (CNN)', 'resunetpp': 'UNET (CNN)',
+    #     'hrnet_ocr_w18': 'Hybrid SOTA', 'hrnet_ocr_w32': 'Hybrid SOTA', 'hrnet_ocr_w48': 'Hybrid SOTA',
+    #     'convnext_upernet_base': 'Hybrid SOTA', 'convnext_upernet_small': 'Hybrid SOTA', 'convnext_upernet_tiny': 'Hybrid SOTA',
+    #     'segformer_b0': 'Transformer', 'segformer_b2': 'Transformer', 'swin_unet_tiny': 'Transformer',
+    #     'dinov2_vit_b': 'DINOv2 (Foundation)', 'dinov2_vit_l': 'DINOv2 (Foundation)', 'dinov2_vit_s': 'DINOv2 (Foundation)',
+    #     'sam_vit_b': 'SAM (Foundation)', 'sam_vit_h': 'SAM (Foundation)', 'sam_vit_l': 'SAM (Foundation)',
+    #     'sam_fpn_vit_b': 'SAM (Foundation)', 'sam_fpn_vit_h': 'SAM (Foundation)', 'sam_fpn_vit_l': 'SAM (Foundation)'
+    # }
+
     family_map = {
-        'deeplabv3plus': 'CNN Baseline', 'deeplabv3plus_cbam': 'CNN Baseline', 
-        'unet': 'CNN Baseline', 'unetpp': 'CNN Baseline', 'resunetpp': 'CNN Baseline',
+        'deeplabv3plus': 'CNN', 'deeplabv3plus_cbam': 'CNN', 
+        'unet': 'CNN', 'unetpp': 'CNN', 'resunetpp': 'CNN',
         'hrnet_ocr_w18': 'Hybrid SOTA', 'hrnet_ocr_w32': 'Hybrid SOTA', 'hrnet_ocr_w48': 'Hybrid SOTA',
         'convnext_upernet_base': 'Hybrid SOTA', 'convnext_upernet_small': 'Hybrid SOTA', 'convnext_upernet_tiny': 'Hybrid SOTA',
         'segformer_b0': 'Transformer', 'segformer_b2': 'Transformer', 'swin_unet_tiny': 'Transformer',
-        'dinov2_vit_b': 'Foundation', 'dinov2_vit_l': 'Foundation', 'dinov2_vit_s': 'Foundation',
-        'sam_vit_b': 'Foundation', 'sam_vit_h': 'Foundation', 'sam_vit_l': 'Foundation',
-        'sam_fpn_vit_b': 'Foundation', 'sam_fpn_vit_h': 'Foundation', 'sam_fpn_vit_l': 'Foundation'
+        'dinov2_vit_b': 'DINOv2 (Foundation)', 'dinov2_vit_l': 'DINOv2 (Foundation)', 'dinov2_vit_s': 'DINOv2 (Foundation)',
+        'sam_vit_b': 'SAM (Foundation)', 'sam_vit_h': 'SAM (Foundation)', 'sam_vit_l': 'SAM (Foundation)',
+        'sam_fpn_vit_b': 'SAM (Foundation)', 'sam_fpn_vit_h': 'SAM (Foundation)', 'sam_fpn_vit_l': 'SAM (Foundation)'
     }
+
     df['Family'] = df['model'].map(family_map)
 
     # 3. Set the style for a journal-ready visualization
@@ -43,14 +66,15 @@ def create_test_results_per_image_plots(file_path, output_dir):
     plt.figure(figsize=(16, 8))
     # Sort individual models by median dice for better comparison
     model_order = df.groupby('model')['dice'].median().sort_values(ascending=False).index
-    sns.boxplot(data=df, x='model', y='dice', order=model_order, palette='magma')
+    # sns.boxplot(data=df, x='model', y='dice', order=model_order, palette='magma')
+    sns.boxplot(data=df, x='model', y='dice', order=model_order, palette='viridis')
 
     plt.xticks(rotation=45, ha='right')
     # plt.title('Performance Consistency across All Benchmarked Models', pad=20)
     plt.ylabel('Dice Coefficient')
     plt.xlabel('Model Architecture')
     plt.tight_layout()
-    plt.savefig(f'{output_dir}/boxplot_all_models_dice.png', dpi=1000)
+    plt.savefig(f'{output_dir}/boxplot_all_models_dice.png', dpi=1500)
 
     print("Images saved as 'boxplot_family_dice.png' and 'boxplot_all_models_dice.png'.")
 
@@ -355,8 +379,8 @@ if __name__ == '__main__':
         MATPLOTLIB_AVAILABLE = True
         plt.rcParams['font.family'] = 'serif'
 
-        # create_test_results_per_image_plots('C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/test_results_per_image.csv', 
-        #                                 'C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results')
+        create_test_results_per_image_plots('C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/test_results_per_image.csv', 
+                                        'C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results')
 
         # generate_journal_qualitative_plot(CSV_FILE, 
         #                                   IMAGE_DIRECTORY, 
@@ -369,8 +393,8 @@ if __name__ == '__main__':
         #                         'C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/figure_qualitative_results.png')
         
 
-        perform_segmentation_analysis(CSV_FILE)
-        plot_best_model_distributions(CSV_FILE)
+        # perform_segmentation_analysis(CSV_FILE)
+        # plot_best_model_distributions(CSV_FILE)
 
 
     except ImportError: 
