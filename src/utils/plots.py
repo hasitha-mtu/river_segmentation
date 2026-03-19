@@ -78,6 +78,75 @@ def create_test_results_per_image_plots(file_path, output_dir):
 
     print("Images saved as 'boxplot_family_dice.png' and 'boxplot_all_models_dice.png'.")
 
+def create_failure_rate_plot(file_path, output_dir='.'):
+    # 1. Load Data
+    df = pd.read_csv(file_path)
+    
+    # 2. Map families
+    family_map = {
+        'deeplabv3plus': 'CNN Baseline', 'deeplabv3plus_cbam': 'CNN Baseline', 
+        'unet': 'CNN Baseline', 'unetpp': 'CNN Baseline', 'resunetpp': 'CNN Baseline',
+        'hrnet_ocr_w18': 'Hybrid SOTA', 'hrnet_ocr_w32': 'Hybrid SOTA', 'hrnet_ocr_w48': 'Hybrid SOTA',
+        'convnext_upernet_base': 'Hybrid SOTA', 'convnext_upernet_small': 'Hybrid SOTA', 'convnext_upernet_tiny': 'Hybrid SOTA',
+        'segformer_b0': 'Transformer', 'segformer_b2': 'Transformer', 'swin_unet_tiny': 'Transformer',
+        'dinov2_vit_b': 'Foundation', 'dinov2_vit_l': 'Foundation', 'dinov2_vit_s': 'Foundation',
+        'sam_vit_b': 'Foundation', 'sam_vit_h': 'Foundation', 'sam_vit_l': 'Foundation',
+        'sam_fpn_vit_b': 'Foundation', 'sam_fpn_vit_h': 'Foundation', 'sam_fpn_vit_l': 'Foundation'}
+    
+    df['Family'] = df['model'].map(family_map)
+
+    # 3. Calculate Failure Rates accurately
+    # Group by model and family to get counts of failures (Dice < 0.5)
+    stats = df.groupby(['model', 'Family']).apply(
+        lambda x: pd.Series({
+            'fail_count': (x['dice'] < 0.5).sum(),
+            'total_count': len(x),
+            'fail_percent': ((x['dice'] < 0.5).sum() / len(x)) * 100
+        })
+    ).reset_index()
+
+    # Sort stats by failure percentage (Highest failure to the left)
+    stats = stats.sort_values('fail_percent', ascending=False)
+    stats.to_csv(f'{output_dir}/failure_rates.csv')
+
+    # 4. Plotting
+    plt.figure(figsize=(14, 7))
+    sns.set_theme(style="whitegrid", font_scale=1.2, rc={"font.family": "serif"})
+    
+    # IMPORTANT: We explicitly set the 'order' of the x-axis to our sorted models
+    ax = sns.barplot(
+        data=stats, 
+        x='model', 
+        y='fail_percent', 
+        hue='Family', 
+        dodge=False,      # Bars for different families on same X stay together
+        palette='viridis', 
+        edgecolor='0.2',
+        order=stats['model'] # This ensures the X-axis matches our sorted data!
+    )
+
+    # 5. Correct Annotation Logic
+    # We iterate through the sorted stats dataframe directly to place labels
+    for i, row in enumerate(stats.itertuples()):
+        # i is the x-coordinate because we set the order in sns.barplot
+        # row.fail_percent is the height
+        label = f"{int(row.fail_count)}/{int(row.total_count)}"
+        ax.text(i, row.fail_percent + 0.5, label, 
+                ha='center', va='bottom', fontsize=10, 
+                fontweight='bold', color='black')
+
+    # Legend & Aesthetics
+    plt.legend(title='Model Family', loc='upper right', frameon=True, framealpha=0.9)
+    plt.xticks(rotation=45, ha='right')
+    plt.ylabel('Images with $Dice < 0.50$ (%)')
+    plt.xlabel('Segmentation Models')
+    plt.ylim(0, stats['fail_percent'].max() + 10) # Add 10% headroom for labels
+    
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/failure_rates.png', dpi=1000)
+    print("Corrected plot saved as 'failure_rates.png'")
+
 # # --- PUBLICATION STYLE SETUP ---
 # plt.rcParams['font.family'] = 'serif'
 # plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif']
@@ -379,8 +448,12 @@ if __name__ == '__main__':
         MATPLOTLIB_AVAILABLE = True
         plt.rcParams['font.family'] = 'serif'
 
-        create_test_results_per_image_plots('C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/test_results_per_image.csv', 
+        # create_test_results_per_image_plots('C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/test_results_per_image.csv', 
+        #                                 'C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results')
+        
+        create_failure_rate_plot('C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results/test_results_per_image.csv', 
                                         'C:/Users/AdikariAdikari/PycharmProjects/river_segmentation/24GB_results/results')
+        
 
         # generate_journal_qualitative_plot(CSV_FILE, 
         #                                   IMAGE_DIRECTORY, 
