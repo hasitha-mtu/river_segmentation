@@ -643,7 +643,7 @@ def _plot_coverage_performance(
     # fig.tight_layout()
     plt.subplots_adjust(hspace=0.3, wspace=0.2)
     out = output_dir / 'fig_coverage_performance.png'
-    fig.savefig(out, dpi=1000, bbox_inches='tight')
+    fig.savefig(out, dpi=1600, bbox_inches='tight')
     plt.close(fig)
     print(f"  Saved figure: {out}")
 
@@ -924,30 +924,193 @@ def analyse_image_statistics(
         _plot_coverage_scatter(stat_rows, models[:5], output_dir)
 
 
+# def _plot_stat_correlations(corr_rows, stat_descriptions, output_dir):
+#     """Bar chart of mean Spearman rho per image statistic."""
+#     stats_sorted = sorted(
+#         corr_rows,
+#         key=lambda r: float(r['mean_rho_across_models'] or 0)
+#     )
+#     labels   = [r['statistic'] for r in stats_sorted]
+#     mean_rhos = [float(r['mean_rho_across_models'] or 0) for r in stats_sorted]
+#     std_rhos  = [float(r['std_rho_across_models']  or 0) for r in stats_sorted]
+
+#     colours = ['#F44336' if v < 0 else '#2196F3' for v in mean_rhos]
+
+#     fig, ax = plt.subplots(figsize=(9, 5))
+#     bars = ax.barh(range(len(labels)), mean_rhos, xerr=std_rhos,
+#                    color=colours, alpha=0.8, error_kw={'linewidth': 1.0, 'capsize': 3})
+#     ax.set_yticks(range(len(labels)))
+#     ax.set_yticklabels(labels, fontsize=9)
+#     ax.set_ylabel('Computable image statistics', fontsize=12)
+#     ax.axvline(0, color='black', linewidth=0.8)
+#     ax.set_xlabel("Mean Spearman ρ with per-image Dice (across all models)", fontsize=12)
+#     # ax.set_title("Image Statistics vs. Segmentation Dice — Spearman Rank Correlation", fontsize=12)
+#     ax.grid(axis='x', linestyle=':', alpha=0.4)
+#     fig.tight_layout()
+#     out = output_dir / 'fig_stat_correlations.png'
+#     fig.savefig(out, dpi=1500, bbox_inches='tight')
+#     plt.close(fig)
+#     print(f"  Saved figure: {out}")
+
 def _plot_stat_correlations(corr_rows, stat_descriptions, output_dir):
-    """Bar chart of mean Spearman rho per image statistic."""
+    """
+    Horizontal bar chart of mean Spearman rho per image statistic.
+ 
+    Improvements over the original:
+    - Y-axis shows human-readable description as primary label with the
+      variable name as a smaller secondary label below each bar.
+    - Bars colour-coded by |rho| strength tier:
+        dark blue  : |rho| >= 0.5   (strong positive)
+        mid blue   : |rho| >= 0.2   (moderate positive)
+        light gray : |rho| <  0.2   (weak / non-significant)
+        dark red   : strong negative
+        mid red    : moderate negative
+        pinkish    : weak negative
+    - Error bars (std across models) retained.
+    - Vertical dashed guides at ±0.2 and ±0.5 mark strength thresholds.
+    - Numeric rho value annotated at the end of each bar.
+    - Primary driver (gt_ratio) marked with an arrow annotation.
+    - Autocorrelation caveat printed as a figure footnote.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    import numpy as np
+    from matplotlib.patches import Patch
+ 
     stats_sorted = sorted(
         corr_rows,
         key=lambda r: float(r['mean_rho_across_models'] or 0)
     )
-    labels   = [r['statistic'] for r in stats_sorted]
-    mean_rhos = [float(r['mean_rho_across_models'] or 0) for r in stats_sorted]
-    std_rhos  = [float(r['std_rho_across_models']  or 0) for r in stats_sorted]
-
-    colours = ['#F44336' if v < 0 else '#2196F3' for v in mean_rhos]
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    bars = ax.barh(range(len(labels)), mean_rhos, xerr=std_rhos,
-                   color=colours, alpha=0.8, error_kw={'linewidth': 1.0, 'capsize': 3})
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=9)
-    ax.axvline(0, color='black', linewidth=0.8)
-    ax.set_xlabel("Mean Spearman ρ with per-image Dice (across all models)", fontsize=10)
-    ax.set_title("Image Statistics vs. Segmentation Dice — Spearman Rank Correlation", fontsize=12)
-    ax.grid(axis='x', linestyle=':', alpha=0.4)
-    fig.tight_layout()
+ 
+    var_names  = [r['statistic'] for r in stats_sorted]
+    descs      = [stat_descriptions.get(v, v) for v in var_names]
+    mean_rhos  = [float(r['mean_rho_across_models'] or 0) for r in stats_sorted]
+    std_rhos   = [float(r['std_rho_across_models']  or 0) for r in stats_sorted]
+    n_bars     = len(var_names)
+ 
+    # ── Colour by significance tier ──────────────────────────────────────────
+    def bar_colour(rho):
+        a = abs(rho)
+        if rho >= 0:
+            if a >= 0.5:  return '#1565C0'  # strong positive
+            elif a >= 0.2: return '#42A5F5'  # moderate positive
+            else:          return '#B0BEC5'  # weak
+        else:
+            if a >= 0.5:  return '#B71C1C'  # strong negative
+            elif a >= 0.2: return '#EF5350'  # moderate negative
+            else:          return '#BCAAA4'  # weak negative
+ 
+    colours = [bar_colour(v) for v in mean_rhos]
+ 
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(11, 6.5))
+    fig.subplots_adjust(left=0.44, right=0.94, top=0.93, bottom=0.10)
+ 
+    y_pos = np.arange(n_bars)
+ 
+    ax.barh(
+        y_pos, mean_rhos,
+        xerr=std_rhos,
+        color=colours,
+        alpha=0.88,
+        height=0.62,
+        error_kw={'linewidth': 1.0, 'capsize': 3, 'ecolor': '#555555'},
+        zorder=3,
+    )
+ 
+    # ── Y-axis: invisible tick labels; draw two-line text manually ────────────
+    # matplotlib does not support mixed font sizes within a single tick label,
+    # so we suppress tick labels and draw two ax.text() calls per bar:
+    #   line 1  – description (larger, dark)
+    #   line 2  – variable name (smaller, muted italic)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([''] * n_bars)
+ 
+    for i, (desc, var) in enumerate(zip(descs, var_names)):
+        # Primary description
+        ax.text(
+            -0.013, i + 0.14, desc,
+            ha='right', va='center',
+            transform=ax.get_yaxis_transform(),
+            fontsize=9.5, color='#1a1a1a',
+        )
+        # Secondary variable name
+        ax.text(
+            -0.013, i - 0.22, f'({var})',
+            ha='right', va='center',
+            transform=ax.get_yaxis_transform(),
+            fontsize=7.8, color='#777777', style='italic',
+        )
+ 
+    # ── Reference lines ──────────────────────────────────────────────────────
+    ax.axvline(0,    color='#333333', linewidth=0.9, zorder=4)
+    for xv in (-0.5, -0.2, 0.2, 0.5):
+        ax.axvline(xv, color='#CCCCCC', linewidth=0.6, linestyle='--', zorder=2)
+ 
+    # ── Numeric value labels ─────────────────────────────────────────────────
+    for i, (rho, std) in enumerate(zip(mean_rhos, std_rhos)):
+        pad = std + 0.02 if rho >= 0 else -(std + 0.02)
+        ha  = 'left'     if rho >= 0 else 'right'
+        ax.text(
+            rho + pad, i,
+            f'{rho:+.3f}',
+            ha=ha, va='center',
+            fontsize=8, color='#333333',
+        )
+ 
+    # ── Primary-driver annotation ────────────────────────────────────────────
+    if 'gt_ratio' in var_names:
+        gi   = var_names.index('gt_ratio')
+        rg   = mean_rhos[gi]
+        ax.annotate(
+            'primary driver',
+            xy=(rg, gi),
+            xytext=(rg - 0.18, gi + 0.75),
+            fontsize=8, color='#1565C0',
+            arrowprops=dict(arrowstyle='->', color='#1565C0', lw=0.8),
+        )
+ 
+    # ── Significance-tier legend ──────────────────────────────────────────────
+    legend_elements = [
+        Patch(facecolor='#1565C0', alpha=0.88, label='|ρ| ≥ 0.5  (strong)'),
+        Patch(facecolor='#42A5F5', alpha=0.88, label='0.2 ≤ |ρ| < 0.5  (moderate)'),
+        Patch(facecolor='#B0BEC5', alpha=0.88, label='|ρ| < 0.2  (weak)'),
+        Patch(facecolor='#EF5350', alpha=0.88, label='Negative correlation'),
+    ]
+    ax.legend(
+        handles=legend_elements,
+        loc='lower right',
+        fontsize=8,
+        framealpha=0.9,
+        edgecolor='#CCCCCC',
+    )
+ 
+    # ── Axes formatting ───────────────────────────────────────────────────────
+    ax.set_xlabel(
+        'Mean Spearman ρ with per-image Dice  (± std across 23 models)',
+        fontsize=11,
+    )
+    ax.set_xlim(-0.75, 1.10)
+    ax.xaxis.set_minor_locator(mticker.MultipleLocator(0.1))
+    ax.tick_params(axis='x', which='both', labelsize=9)
+    ax.set_ylim(-0.7, n_bars - 0.3)
+    ax.grid(axis='x', which='major', linestyle=':', alpha=0.35, zorder=1)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.tick_params(left=False)
+ 
+    # ── Footer note ───────────────────────────────────────────────────────────
+    fig.text(
+        0.97, 0.012,
+        'Note: p-values are lower bounds due to spatial autocorrelation '
+        'between consecutive UAV frames.',
+        ha='right', va='bottom',
+        fontsize=7.5, color='#888888', style='italic',
+    )
+ 
     out = output_dir / 'fig_stat_correlations.png'
-    fig.savefig(out, dpi=150, bbox_inches='tight')
+    fig.savefig(out, dpi=1500, bbox_inches='tight')
     plt.close(fig)
     print(f"  Saved figure: {out}")
 
@@ -1027,7 +1190,7 @@ def parse_args() -> argparse.Namespace:
         '--coverage_bins',
         nargs='+',
         type=float,
-        default=[0.0, 0.005, 0.01, 0.02, 0.05, 0.10, 0.20, 1.0],
+        default=[0.0, 0.005, 0.01, 0.02, 0.05, 0.10],
         help=(
             'Bin edges (as fractions 0–1) for coverage–performance gradient. '
             'Example: 0 0.005 0.01 0.02 0.05 0.10 0.20 1.0'
