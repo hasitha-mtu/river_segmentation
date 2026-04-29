@@ -1,11 +1,17 @@
 import json
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 from pathlib import Path
 import re
 
+plt.rcParams['font.family'] = 'serif'
 
-def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json", 
+BIN_EDGES  = [0.0, 0.001, 0.005, 0.05, 1.01]
+BIN_LABELS = ['Ultra-low\n(<0.1%)', 'Low\n(0.1–0.5%)', 'Medium\n(0.5–5%)', 'High\n(>5%)']
+SPLIT_COLORS = {'train': '#4C72B0', 'val': '#55A868', 'test': '#C44E52'}
+
+def visualize_splits(metadata_path="dataset/processed_512_resized/dataset_metadata.json", 
                      raw_path="dataset/raw"):
     """
     Visualize the spatial distribution of train/val/test splits along the flight path.
@@ -66,6 +72,7 @@ def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json",
         
         # Sort by sequence
         items_sorted = sorted(items, key=lambda x: x['sequence'])
+        n = len(items_sorted)
         
         # Extract GPS coordinates
         lats = [item['gps'][0] for item in items_sorted]
@@ -75,52 +82,48 @@ def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json",
         # Plot the flight path
         ax.plot(lons, lats, 'k-', alpha=0.3, linewidth=1, label='Flight path')
         
-        # Determine which images went to which split for THIS date
-        # Based on the mixed seasonal strategy
-        n = len(items_sorted)
-        
-        # Using the ratios from create_splits_with_buffers
-        train_ratio = 0.6
-        val_ratio = 0.18
-        buffer_size = 10
-        
-        train_end = int(n * train_ratio)
-        buffer1_end = min(train_end + buffer_size, n)
-        val_end = min(buffer1_end + int(n * val_ratio), n)
-        buffer2_end = min(val_end + buffer_size, n)
-        
-        # Train
-        if train_end > 0:
-            ax.scatter(lons[:train_end], lats[:train_end], 
-                      c='blue', s=50, alpha=0.6, label=f'Train ({train_end})', zorder=3)
-        
-        # Buffer 1
-        if buffer1_end > train_end:
-            ax.scatter(lons[train_end:buffer1_end], lats[train_end:buffer1_end],
-                      c='gray', s=50, alpha=0.6, marker='x', 
-                      label=f'Buffer ({buffer1_end-train_end})', zorder=3)
-        
-        # Val
-        if val_end > buffer1_end:
-            ax.scatter(lons[buffer1_end:val_end], lats[buffer1_end:val_end],
-                      c='green', s=50, alpha=0.6, label=f'Val ({val_end-buffer1_end})', zorder=3)
-        
-        # Buffer 2
-        if buffer2_end > val_end:
-            ax.scatter(lons[val_end:buffer2_end], lats[val_end:buffer2_end],
-                      c='gray', s=50, alpha=0.6, marker='x', 
-                      label=f'Buffer ({buffer2_end-val_end})', zorder=3)
-        
-        # Test
-        if buffer2_end < n:
-            ax.scatter(lons[buffer2_end:], lats[buffer2_end:],
-                      c='red', s=50, alpha=0.6, label=f'Test ({n-buffer2_end})', zorder=3)
+        # Build lookup: filename → split assignment
+        # This reads directly from the saved gt_ratio_records in metadata,
+        # so it is always accurate regardless of what split strategy was used.
+        filename_to_split = {}
+        for split_name in ['train', 'val', 'test']:
+            for record in metadata.get('splits', {}).get(split_name, {}).get('gt_ratio_records', []):
+                # Records store filename with extension; strip it for matching
+                fname = Path(record['filename']).stem
+                filename_to_split[fname] = split_name
+
+        # Draw each image coloured by its actual split assignment.
+        # Images not found in metadata (discarded buffers) are coloured gray.
+        label_style = {
+            'train':  ('#4C72B0', 'o', 0.45, 40),
+            'val':    ('#55A868', 'o', 0.55, 40),
+            'test':   ('#C44E52', 'o', 0.85, 60),
+            'buffer': ('gray',   'x', 0.30, 25),
+        }
+        counts = {k: 0 for k in label_style}
+
+        for item in items_sorted:
+            fname  = Path(item['filename']).stem
+            label  = filename_to_split.get(fname, 'buffer')
+            counts[label] += 1
+            col, marker, alpha, size = label_style[label]
+            ax.scatter(item['gps'][1], item['gps'][0],
+                       c=col, s=size, alpha=alpha, marker=marker,
+                       label='_nolegend_', zorder=3)
+
+        # Add one legend entry per split showing final counts
+        for label, (col, marker, alpha, size) in label_style.items():
+            if counts[label] > 0:
+                ax.scatter([], [], c=col, s=size, alpha=min(alpha+0.2, 1.0),
+                           marker=marker,
+                           label=f"{label.capitalize()} ({counts[label]})")
         
         # Add season annotation
         season = "Winter (March)" if "03/24" in date_str else "Summer (July)" if "07/28" in date_str else ""
         ax.set_xlabel('Longitude', fontsize=12)
         ax.set_ylabel('Latitude', fontsize=12)
-        ax.set_title(f'Flight Path - {date_str} ({season})', fontsize=14, fontweight='bold')
+        # ax.set_title(f'Flight Path - {date_str} ({season})', fontsize=14, fontweight='bold')
+        ax.set_title(f'Flight Path - {date_str} ({season})', y=-0.3, fontsize=14)
         ax.legend(loc='best', fontsize=10)
         ax.grid(True, alpha=0.3)
         
@@ -131,7 +134,8 @@ def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json",
                        fontsize=8, alpha=0.5, xytext=(5, 5), 
                        textcoords='offset points')
     
-    plt.tight_layout()
+    # plt.tight_layout()
+    plt.subplots_adjust(hspace=0.5, wspace=0.2)
     
     # Save figure
     output_path = Path(metadata_path).parent / "split_visualization.png"
@@ -143,58 +147,197 @@ def visualize_splits(metadata_path="dataset/processed/dataset_metadata.json",
     print("STATISTICS:")
     print(f"{'='*70}")
     for split, stats in metadata['splits'].items():
-        print(f"{split.capitalize():12s}: {stats['images']:3d} images → {stats['outputs']:4d} outputs")
+        print(f"{split.capitalize():12s}: {stats['images']:3d} images")
     
     plt.show()
 
 
-def print_split_details(metadata_path="dataset/processed/dataset_metadata.json"):
+def print_split_details(metadata_path="dataset/processed_512_resized/dataset_metadata.json"):
     """
-    Print detailed information about the splits.
+    Print detailed information about the resized dataset splits.
+    Works with the metadata format produced by create_resized_dataset.py.
     """
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
-    
+
     print("\n" + "="*70)
-    print("DATASET METADATA")
+    print("DATASET METADATA  (resized dataset)")
     print("="*70)
+
     print(f"\nConfiguration:")
-    print(f"  Patch size: {metadata['patch_size']}x{metadata['patch_size']}")
-    print(f"  Stride: {metadata['stride']}")
-    print(f"  Buffer size: {metadata['buffer_size']} images")
-    
+    print(f"  Mode:          {metadata.get('mode', 'resize')}")
+    print(f"  Target size:   {metadata.get('target_size', '?')}×{metadata.get('target_size', '?')}")
+    print(f"  Buffer size:   {metadata.get('buffer_size', '?')} images per window boundary")
+    print(f"  Split strategy: {metadata.get('split_strategy', 'sequential')}")
+    if metadata.get('n_windows'):
+        print(f"  N windows:     {metadata['n_windows']}")
+
     print(f"\nDate Distribution (original images):")
     for date, count in metadata['date_distribution'].items():
         print(f"  {date}: {count} images")
-    
+
     print(f"\nSplit Statistics:")
     total_images = sum(s['images'] for s in metadata['splits'].values())
-    total_outputs = sum(s['outputs'] for s in metadata['splits'].values())
-    
+
     for split, stats in metadata['splits'].items():
-        img_pct = stats['images'] / total_images * 100
-        patch_pct = stats['outputs'] / total_outputs * 100
-        outputs_per_img = stats['outputs'] / stats['images'] if stats['images'] > 0 else 0
-        
+        img_pct = stats['images'] / total_images * 100 if total_images else 0
+
+        # gt_ratio summary if available
+        records = stats.get('gt_ratio_records', [])
+        gt_info = ""
+        if records:
+            import numpy as np
+            gts = [r['gt_ratio'] for r in records]
+            gt_info = (f"  mean gt={np.mean(gts)*100:.2f}%  "
+                       f"max gt={np.max(gts)*100:.2f}%")
+
         print(f"\n  {split.capitalize()}:")
         print(f"    Images:  {stats['images']:3d} ({img_pct:5.1f}%)")
-        print(f"    Patches: {stats['outputs']:4d} ({patch_pct:5.1f}%)")
-        print(f"    Patches per image: {outputs_per_img:.1f}")
-    
-    print(f"\n  Total:")
-    print(f"    Images:  {total_images}")
-    print(f"    Patches: {total_outputs}")
+        if stats.get('skipped', 0):
+            print(f"    Skipped: {stats['skipped']}")
+        if gt_info:
+            print(f"    gt_ratio:{gt_info}")
+
+    print(f"\n  Total images: {total_images}")
+
+
+def visualize_gt_ratio_distribution(metadata_path="dataset/processed_512_resized/dataset_metadata.json"):
+    """
+    Plot gt_ratio distributions across train/val/test splits.
+
+    Reads gt_ratio_records saved by create_resized_dataset.py and produces:
+      - Histogram per split (log-scale x-axis to show ultra-low tail)
+      - Grouped bar chart of bin percentages (the key reviewer diagnostic)
+      - Empirical CDF overlay
+
+    This figure should be included in the revision response as evidence that
+    the new stratified split resolves the distribution mismatch (R1 Major #1).
+    """
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+
+    splits = ['train', 'val', 'test']
+    ratios = {}
+    for split in splits:
+        records = metadata.get('splits', {}).get(split, {}).get('gt_ratio_records', [])
+        if not records:
+            print(f"  WARNING: no gt_ratio_records found for {split}. "
+                  f"Re-run create_resized_dataset.py to regenerate metadata.")
+            return
+        ratios[split] = np.array([r['gt_ratio'] for r in records])
+
+    fig = plt.figure(figsize=(15, 10))
+    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.42, wspace=0.35,
+                            top=0.90, bottom=0.08, left=0.07, right=0.97)
+
+    log_bins = np.logspace(np.log10(5e-4), np.log10(0.25), 30)
+
+    # Row 1: histograms per split
+    for col, split in enumerate(splits):
+        ax = fig.add_subplot(gs[0, col])
+        r  = ratios[split]
+        ax.hist(r, bins=log_bins, color=SPLIT_COLORS[split],
+                edgecolor='white', linewidth=0.4, alpha=0.88)
+        ax.set_xscale('log')
+        ax.set_title(f'{split.capitalize()}  (n={len(r)})', fontweight='bold')
+        ax.set_xlabel('gt_ratio (log scale)')
+        ax.set_ylabel('Count')
+        ax.grid(True, alpha=0.2, which='both')
+        # reviewer threshold lines
+        for thr, lbl, col_name in [(0.001,'0.1%','gray'),(0.005,'0.5%','darkorange'),(0.10,'10%','firebrick')]:
+            ax.axvline(thr, color=col_name, linestyle='--', linewidth=1, alpha=0.75)
+            ax.text(thr*1.1, ax.get_ylim()[1]*0.88, lbl, fontsize=7,
+                    color=col_name, rotation=90, va='top')
+        ax.axvline(r.max(), color=SPLIT_COLORS[split], linestyle=':', linewidth=1.3)
+
+    # Row 2 left: grouped bin bar chart
+    ax_bar = fig.add_subplot(gs[1, 0])
+    x, w   = np.arange(len(BIN_LABELS)), 0.25
+    for i, split in enumerate(splits):
+        r    = ratios[split]
+        pcts = [100 * np.mean((r >= BIN_EDGES[j]) & (r < BIN_EDGES[j+1]))
+                for j in range(len(BIN_LABELS))]
+        ax_bar.bar(x + (i-1)*w, pcts, w, color=SPLIT_COLORS[split],
+                   label=split.capitalize(), edgecolor='white', linewidth=0.4)
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(BIN_LABELS, fontsize=8.5)
+    ax_bar.set_ylabel('Percentage of split (%)')
+    ax_bar.set_title('gt_ratio Bin Breakdown (Reviewer Diagnostic)', fontweight='bold')
+    ax_bar.legend(fontsize=9)
+    ax_bar.grid(True, alpha=0.2, axis='y')
+
+    # Row 2 mid: CDF
+    ax_cdf = fig.add_subplot(gs[1, 1])
+    for split in splits:
+        r   = np.sort(ratios[split])
+        cdf = np.arange(1, len(r)+1) / len(r)
+        ax_cdf.plot(r, cdf, color=SPLIT_COLORS[split], linewidth=2.2,
+                    label=f'{split.capitalize()} (n={len(r)})')
+    for thr, lbl in [(0.001,'0.1%'),(0.005,'0.5%'),(0.10,'10%')]:
+        ax_cdf.axvline(thr, color='gray', linestyle=':', linewidth=0.9)
+        ax_cdf.text(thr*1.1, 0.03, lbl, fontsize=7.5, color='gray',
+                    rotation=90, va='bottom')
+    ax_cdf.set_xscale('log')
+    ax_cdf.set_xlabel('gt_ratio (log scale)')
+    ax_cdf.set_ylabel('Cumulative fraction')
+    ax_cdf.set_title('Empirical CDF', fontweight='bold')
+    ax_cdf.legend(fontsize=9)
+    ax_cdf.grid(True, alpha=0.2, which='both')
+
+    # Row 2 right: stats table
+    ax_tbl = fig.add_subplot(gs[1, 2])
+    ax_tbl.axis('off')
+    row_labels = ['n', 'Mean%', 'Median%', 'Min%', 'Max%',
+                  'Ultra-low', 'Low', 'Medium', 'High', '>10% cov.']
+    table_data = [
+        [str(len(ratios[s])) for s in splits],
+        [f'{ratios[s].mean()*100:.2f}%'       for s in splits],
+        [f'{np.median(ratios[s])*100:.2f}%'   for s in splits],
+        [f'{ratios[s].min()*100:.4f}%'         for s in splits],
+        [f'{ratios[s].max()*100:.2f}%'         for s in splits],
+        [f'{np.mean(ratios[s]<0.001)*100:.0f}%' for s in splits],
+        [f'{np.mean((ratios[s]>=0.001)&(ratios[s]<0.005))*100:.0f}%' for s in splits],
+        [f'{np.mean((ratios[s]>=0.005)&(ratios[s]<0.05))*100:.0f}%'  for s in splits],
+        [f'{np.mean(ratios[s]>=0.05)*100:.0f}%'  for s in splits],
+        [f'{np.sum(ratios[s]>=0.10)}'             for s in splits],
+    ]
+    tbl = ax_tbl.table(cellText=table_data, rowLabels=row_labels,
+                       colLabels=['Train','Val','Test'],
+                       cellLoc='center', loc='center')
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.5)
+    tbl.scale(1, 1.45)
+    for col, split in enumerate(splits):
+        tbl[0, col].set_facecolor(SPLIT_COLORS[split])
+        tbl[0, col].set_text_props(color='white', fontweight='bold')
+    # Highlight test column for rows 6-10 (bin rows)
+    for row in range(6, 11):
+        tbl[row, 2].set_facecolor('#fde0dc')
+    ax_tbl.set_title('Summary Statistics', fontweight='bold', pad=12)
+
+    strategy = metadata.get('split_strategy', 'sequential')
+    fig.suptitle(
+        f'gt_ratio Distribution — {strategy.capitalize()} Split\n'
+        f'(n_windows={metadata.get("n_windows","N/A")}, buffer={metadata.get("buffer_size","N/A")})',
+        fontsize=12, fontweight='bold', y=0.97
+    )
+
+    out_path = Path(metadata_path).parent / "gt_ratio_distribution.png"
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    print(f"\n  gt_ratio distribution saved → {out_path}")
+    plt.show()
 
 
 if __name__ == "__main__":
-    # # Print metadata
-    # print_split_details()
-    
-    # # Create visualization
-    # print("\nGenerating visualization...")
-    # visualize_splits()
+    choices  = ['sequential', 'stratified', 'alternative']
+    RAW      = "dataset/raw"
+    for choice in choices:
+        METADATA = f"dataset/processed_512_resized/{choice}/dataset_metadata.json"
 
-    
-    print_split_details("dataset/processed_512_resized/dataset_metadata.json")
-    visualize_splits("dataset/processed_512_resized/dataset_metadata.json", 
-                     "dataset/raw")
+        print_split_details(METADATA)
+
+        print("\nGenerating spatial split visualization...")
+        visualize_splits(METADATA, RAW)
+
+        print("\nGenerating gt_ratio distribution (reviewer diagnostic)...")
+        visualize_gt_ratio_distribution(METADATA)
