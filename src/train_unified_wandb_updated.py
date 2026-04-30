@@ -1266,9 +1266,10 @@ def train_all_models(base_config: dict):
         # Hybrid SOTA
         'convnext_upernet': ['tiny', 'small', 'base'],
         'hrnet_ocr'      : ['w18', 'w32', 'w48'],
-        # Foundation models
-        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
-        'dinov2'         : ['vit_s', 'vit_b', 'vit_l',],
+        # # Foundation models
+        # 'sam'            : ['vit_b', 'vit_l', 'vit_h'],
+        # 'sam_fpn'        : ['vit_b', 'vit_l', 'vit_h'],
+        # 'dinov2'         : ['vit_s', 'vit_b', 'vit_l',],
     }
 
     # Foundation models use early stopping to prevent overfitting on the
