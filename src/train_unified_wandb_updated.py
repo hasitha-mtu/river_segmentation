@@ -1326,7 +1326,6 @@ def main():
         default_config['data']['data_root'] = data_root
         default_config['system']['output_dir'] = output_dir
 
-        default_config['logging']['use_wandb'] = False
 
         print(f'updated data_root: {default_config['data']['data_root']}')
         print(f'updated output_dir: {default_config['system']['output_dir']}')
