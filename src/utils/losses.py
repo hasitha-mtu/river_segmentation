@@ -155,9 +155,7 @@ class CombinedLoss(nn.Module):
         
         # Compute main losses
         bce = self.bce(predictions, targets)
-        print(f'CombinedLoss| bce: {bce} ')
         dice = self.dice(predictions, targets)
-        print(f'CombinedLoss| dice: {dice} ')
         
         loss_dict['bce'] = bce.item()
         loss_dict['dice'] = dice.item()
