@@ -37,7 +37,7 @@ from torchvision import transforms
 from tqdm import tqdm
 import wandb
 
-from models import get_model, get_model_varient
+from models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
@@ -1191,12 +1191,12 @@ def get_default_config():
             },
         },
         'loss': {
-            'type'          : 'combined',
-            'bce_weight'    : 1.0,
-            'dice_weight'   : 1.0,
+            'type'           : 'combined',
+            'bce_weight'     : 1.0,
+            'dice_weight'    : 1.0,
             'boundary_weight': 1.0,
-            'use_boundary'  : False,
-            'aux_weight'    : 0.4,  # GlobalLocal: weight for auxiliary branch losses
+            'use_boundary'   : True,
+            'aux_weight'     : 0.4,  # GlobalLocal: weight for auxiliary branch losses
         },
         'logging': {
             'use_wandb'       : True,
@@ -1252,10 +1252,23 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     """Train all SAM variants (and optionally DINOv2) sequentially."""
+
     all_models = {
-        # Uncomment dinov2 when ready to train:
-        'dinov2': ['vit_s', 'vit_b', 'vit_l'],
-        # 'sam'    : ['vit_b', 'vit_l', 'vit_h'],
+        # CNN baselines
+        'unet'           : [],
+        'unetpp'         : [],
+        'resunetpp'      : [],
+        'deeplabv3plus'  : [],
+        'deeplabv3plus_cbam': [],
+        # Transformers
+        'segformer'      : ['b0', 'b2'],
+        'swin_unet'      : ['tiny'],
+        # Hybrid SOTA
+        'convnext_upernet': ['tiny', 'small', 'base'],
+        'hrnet_ocr'      : ['w18', 'w32', 'w48'],
+        # Foundation models
+        'sam'            : ['vit_b', 'vit_l', 'vit_h'],
+        'dinov2'         : ['vit_s', 'vit_b', 'vit_l',],
     }
 
     # Foundation models use early stopping to prevent overfitting on the
@@ -1294,7 +1307,30 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    train_all_models(get_default_config())
+    default_config = get_default_config()
+    print(f'default_config: {default_config}')
+    print(f'data_root: {default_config['data']['data_root']}')
+    print(f'epochs: {default_config['training']['epochs']}')
+    print(f'output_dir: {default_config['system']['output_dir']}')
+
+    # default_config['training']['epochs'] = 1
+
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
+    for dataset_variation in dataset_variations:
+        data_root = default_config['data']['data_root']
+        data_root = f'{data_root}/{dataset_variation}'
+        output_dir = default_config['system']['output_dir']
+        output_dir = f'{output_dir}/{dataset_variation}'
+
+        default_config['data']['data_root'] = data_root
+        default_config['system']['output_dir'] = output_dir
+
+        default_config['logging']['use_wandb'] = False
+
+        print(f'updated data_root: {default_config['data']['data_root']}')
+        print(f'updated output_dir: {default_config['system']['output_dir']}')
+
+        train_all_models(default_config)
 
 
 if __name__ == '__main__':
