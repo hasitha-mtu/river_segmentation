@@ -9,6 +9,26 @@ import json
 import shutil
 
 
+# ---------------------------------------------------------------------------
+# gt_ratio bin definitions — used for split diagnostics
+# Thresholds chosen to match reviewer-flagged failure regions
+# ---------------------------------------------------------------------------
+BIN_EDGES  = [0.0, 0.001, 0.005, 0.05, 1.01]
+BIN_LABELS = ['Ultra-low (<0.1%)', 'Low (0.1-0.5%)', 'Medium (0.5-5%)', 'High (>5%)']
+
+
+def compute_gt_ratio(mask_path) -> float:
+    """
+    Compute water-pixel fraction (gt_ratio) from a binary PNG mask.
+    Works whether the mask stores pixel values as 0/255 or 0/1.
+    Returns a float in [0, 1].
+    """
+    arr = np.array(Image.open(mask_path).convert('L'), dtype=np.float32)
+    if arr.max() > 1.0:
+        arr /= 255.0
+    return float(arr.mean())
+
+
 def parse_filename_date(filename):
     """
     Extract date from DJI filename format: DJI_YYYYMMDDHHMMSS_####_V.jpg
@@ -109,6 +129,7 @@ def analyze_dataset(raw_path="dataset/raw"):
 
         date = parse_filename_date(img_path.name)
         gps = get_gps_data(img_path)
+        gt_ratio = compute_gt_ratio(mask_path)   # water-pixel fraction
 
         seq_match = re.search(r'_(\d{4})_V\.jpg', img_path.name)
         sequence = int(seq_match.group(1)) if seq_match else None
@@ -119,7 +140,8 @@ def analyze_dataset(raw_path="dataset/raw"):
             'mask_path': str(mask_path),
             'date': date,
             'gps': gps,
-            'sequence': sequence
+            'sequence': sequence,
+            'gt_ratio': gt_ratio,        # added for stratified splitting
         })
 
         if (i + 1) % 50 == 0:
@@ -164,7 +186,7 @@ def analyze_dataset(raw_path="dataset/raw"):
     return image_metadata, date_groups
 
 
-def create_splits_with_buffers(date_groups, buffer_size=10,
+def create_splits_with_buffers(date_groups, buffer_size=3, n_windows=3,
                                train_ratio=0.6, val_ratio=0.18, test_ratio=0.22):
     """
     Create train/val/test splits with buffer zones to prevent data leakage.
@@ -174,82 +196,116 @@ def create_splits_with_buffers(date_groups, buffer_size=10,
     - Combine splits across dates so each split has both seasons
     - This prevents both spatial leakage AND seasonal domain shift
 
-    Example with 2 dates (winter/summer):
-      Date 1: [train] [buffer] [val] [buffer] [test]
-      Date 2: [train] [buffer] [val] [buffer] [test]
-      Final: train=D1_train+D2_train (both seasons in training!)
+    CHANGED from original sequential split to WINDOWED STRATIFICATION:
+    Previously: Date 1 → [====train====][buf][=val=][buf][test]
+                (test always from the END — low gt_ratio region)
+    Now:        Date 1 → [Win1: tr|b|val|b|te][Win2: tr|b|val|b|te][Win3: ...]
+                (test sampled from ALL spatial regions → balanced gt_ratio)
+
+    n_windows=3 means each date's sequence is divided into 3 windows.
+    A sequential split is applied inside each window, so test images come
+    from the beginning, middle, and end of the flight path, giving the test
+    set a gt_ratio distribution that matches training data.
     """
     print(f"\n{'='*70}")
-    print("CREATING SPLITS WITH BUFFER ZONES")
-    print(f"STRATEGY: Mixed seasonal split to prevent domain shift")
+    print("CREATING STRATIFIED WINDOWED SPLITS")
+    print(f"STRATEGY: {n_windows} spatial windows per date, mixed seasonal")
     print(f"{'='*70}")
 
-    dates = sorted(date_groups.keys())
+    combined_splits = {'train': [], 'val': [], 'test': [], 'buffers': []}
 
-    combined_splits = {
-        'train': [],
-        'val': [],
-        'test': [],
-        'buffers': []
-    }
-
-    for date_str in dates:
-        images = sorted(date_groups[date_str], key=lambda x: x['sequence'] if x['sequence'] else 0)
+    for date_str in sorted(date_groups.keys()):
+        images = sorted(date_groups[date_str],
+                        key=lambda x: x['sequence'] if x['sequence'] else 0)
         n = len(images)
+        window_size = n // n_windows
 
-        print(f"\nProcessing {date_str}: {n} images")
+        print(f"\n  {date_str}: {n} images → {n_windows} windows of ~{window_size} each")
+        print(f"  {'Win':>4} {'Frames':>12} {'Train':>6} {'Buf':>4} "
+              f"{'Val':>5} {'Buf':>4} {'Test':>5}")
+        print(f"  {'-'*44}")
 
-        train_end = int(n * train_ratio)
-        buffer1_end = min(train_end + buffer_size, n)
-        val_end = min(buffer1_end + int(n * val_ratio), n)
-        buffer2_end = min(val_end + buffer_size, n)
+        for w in range(n_windows):
+            w_start = w * window_size
+            w_end   = w_start + window_size if w < n_windows - 1 else n
+            window  = images[w_start:w_end]
+            wn      = len(window)
 
-        date_train = images[:train_end]
-        date_buffer1 = images[train_end:buffer1_end]
-        date_val = images[buffer1_end:val_end]
-        date_buffer2 = images[val_end:buffer2_end]
-        date_test = images[buffer2_end:]
+            # Proportional buffer: 6% of window size, capped at global buffer_size,
+            # minimum 2 frames. Prevents large buffer_size values from consuming
+            # the entire test portion of small windows (the cause of too-few-test-images).
+            w_buf = max(2, min(buffer_size, int(wn * 0.06)))
 
-        combined_splits['train'].extend(date_train)
-        combined_splits['val'].extend(date_val)
-        combined_splits['test'].extend(date_test)
-        combined_splits['buffers'].extend(date_buffer1 + date_buffer2)
+            train_end   = int(wn * train_ratio)
+            buf1_end    = min(train_end + w_buf, wn)
+            val_end     = min(buf1_end + int(wn * val_ratio), wn)
+            buf2_end    = min(val_end + w_buf, wn)
 
-        print(f"  Train: {len(date_train)}, Buffer1: {len(date_buffer1)}, "
-              f"Val: {len(date_val)}, Buffer2: {len(date_buffer2)}, Test: {len(date_test)}")
+            combined_splits['train'].extend(window[:train_end])
+            combined_splits['buffers'].extend(window[train_end:buf1_end])
+            combined_splits['val'].extend(window[buf1_end:val_end])
+            combined_splits['buffers'].extend(window[val_end:buf2_end])
+            combined_splits['test'].extend(window[buf2_end:])
 
-    total = sum(len(v) for v in combined_splits.values())
-    total_used = len(combined_splits['train']) + len(combined_splits['val']) + len(combined_splits['test'])
-    total_buffer = len(combined_splits['buffers'])
+            print(f"  {w+1:>4} {w_start:>5}–{w_end:<5} {train_end:>6} "
+                  f"{buf1_end-train_end:>4} (w_buf={w_buf}) "
+                  f"{val_end-buf1_end:>5} {buf2_end-val_end:>4} {wn-buf2_end:>5}")
+
+    total     = sum(len(v) for v in combined_splits.values())
+    total_used = (len(combined_splits['train']) + len(combined_splits['val']) +
+                  len(combined_splits['test']))
 
     print(f"\n{'='*70}")
     print("SPLIT SUMMARY:")
     print(f"{'='*70}")
-    print(f"  Train:      {len(combined_splits['train']):4d} images ({len(combined_splits['train'])/total*100:.1f}%)")
-    print(f"  Val:        {len(combined_splits['val']):4d} images ({len(combined_splits['val'])/total*100:.1f}%)")
-    print(f"  Test:       {len(combined_splits['test']):4d} images ({len(combined_splits['test'])/total*100:.1f}%)")
-    print(f"  Buffers:    {total_buffer:4d} images (DISCARDED)")
-    print(f"\n  Total images used: {total_used}/{total} ({total_used/total*100:.1f}%)")
+    for sn in ['train', 'val', 'test']:
+        n = len(combined_splits[sn])
+        print(f"  {sn.capitalize():8s}: {n:4d} images ({n/total*100:.1f}%)")
+    print(f"  Buffers:  {len(combined_splits['buffers']):4d} images (DISCARDED)")
+    print(f"\n  Total used: {total_used}/{total} ({total_used/total*100:.1f}%)")
 
+    # Seasonal distribution
     print(f"\n{'='*70}")
-    print(f"SEASONAL DISTRIBUTION (prevents domain shift):")
+    print("SEASONAL DISTRIBUTION (prevents domain shift):")
     print(f"{'='*70}")
-
     for split_name in ['train', 'val', 'test']:
-        split_images = combined_splits[split_name]
         date_counts = {}
-        for img in split_images:
-            date_str = img['date'].strftime('%Y/%m/%d') if img['date'] else 'Unknown'
-            date_counts[date_str] = date_counts.get(date_str, 0) + 1
-
+        for img in combined_splits[split_name]:
+            ds = img['date'].strftime('%Y/%m/%d') if img['date'] else 'Unknown'
+            date_counts[ds] = date_counts.get(ds, 0) + 1
         print(f"\n  {split_name.capitalize()}:")
-        for date_str in sorted(date_counts.keys()):
-            print(f"    {date_str}: {date_counts[date_str]:3d} images")
+        for ds in sorted(date_counts):
+            print(f"    {ds}: {date_counts[ds]:3d} images")
+
+    # gt_ratio bin distribution — key diagnostic for reviewer response
+    print(f"\n{'='*70}")
+    print("GT_RATIO BIN DISTRIBUTION PER SPLIT (reviewer diagnostic):")
+    print(f"{'='*70}")
+    print(f"  {'Bin':<22} {'Train%':>8} {'Val%':>8} {'Test%':>8}")
+    print(f"  {'-'*50}")
+    for i, label in enumerate(BIN_LABELS):
+        lo, hi = BIN_EDGES[i], BIN_EDGES[i+1]
+        row = f"  {label:<22}"
+        for sn in ['train', 'val', 'test']:
+            imgs  = combined_splits[sn]
+            n_bin = sum(lo <= img['gt_ratio'] < hi for img in imgs)
+            row  += f" {n_bin/len(imgs)*100:>7.1f}%"
+        print(row)
+
+    # Warn if test still lacks high-coverage images
+    test_imgs   = combined_splits['test']
+    max_test_gt = max(img['gt_ratio'] for img in test_imgs) if test_imgs else 0
+    if max_test_gt < 0.10:
+        print(f"\n  WARNING: max test gt_ratio = {max_test_gt*100:.2f}% — "
+              f"consider increasing n_windows")
+    else:
+        print(f"\n  OK: test set now includes images up to {max_test_gt*100:.2f}% "
+              f"coverage — mismatch resolved")
 
     return {
         'train': combined_splits['train'],
-        'val': combined_splits['val'],
-        'test': combined_splits['test']
+        'val':   combined_splits['val'],
+        'test':  combined_splits['test'],
     }
 
 
@@ -326,6 +382,7 @@ def create_resized_dataset(
         images = splits[split_name]
         saved = 0
         skipped = 0
+        gt_ratio_records = []       # per-image gt_ratio for cross-split comparison
 
         for i, img_meta in enumerate(images):
             try:
@@ -345,6 +402,12 @@ def create_resized_dataset(
                 mask_out = output_path / split_name / "masks" / f"{stem}.png"
                 resized_mask.save(mask_out, "PNG")
 
+                gt_ratio_records.append({
+                    'filename': img_meta['filename'],
+                    'date':     img_meta['date'].strftime('%Y/%m/%d') if img_meta['date'] else 'Unknown',
+                    'gt_ratio': img_meta['gt_ratio'],
+                })
+
                 saved += 1
 
             except Exception as e:
@@ -354,7 +417,11 @@ def create_resized_dataset(
             if (i + 1) % 20 == 0:
                 print(f"  Saved {saved}/{len(images)} images...")
 
-        split_stats[split_name] = {'images': saved, 'skipped': skipped}
+        split_stats[split_name] = {
+            'images':           saved,
+            'skipped':          skipped,
+            'gt_ratio_records': gt_ratio_records,   # for audit_current_split.py
+        }
         print(f"  Completed {split_name}: {saved} saved, {skipped} skipped")
 
     # Step 5: Save metadata

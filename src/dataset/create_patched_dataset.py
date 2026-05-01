@@ -9,6 +9,18 @@ import json
 import shutil
 
 
+BIN_EDGES  = [0.0, 0.001, 0.005, 0.05, 1.01]
+BIN_LABELS = ['Ultra-low (<0.1%)', 'Low (0.1-0.5%)', 'Medium (0.5-5%)', 'High (>5%)']
+
+
+def compute_gt_ratio(mask_path) -> float:
+    """Water-pixel fraction from a binary PNG mask. Returns float in [0,1]."""
+    arr = np.array(Image.open(mask_path).convert('L'), dtype=np.float32)
+    if arr.max() > 1.0:
+        arr /= 255.0
+    return float(arr.mean())
+
+
 def parse_filename_date(filename):
     """
     Extract date from DJI filename format: DJI_YYYYMMDDHHMMSS_####_V.jpg
@@ -116,6 +128,9 @@ def analyze_dataset(raw_path="dataset/raw"):
         
         # Extract GPS
         gps = get_gps_data(img_path)
+
+        # Compute water-pixel fraction from mask
+        gt_ratio = compute_gt_ratio(mask_path)
         
         # Extract sequence number
         seq_match = re.search(r'_(\d{4})_V\.jpg', img_path.name)
@@ -127,7 +142,8 @@ def analyze_dataset(raw_path="dataset/raw"):
             'mask_path': str(mask_path),
             'date': date,
             'gps': gps,
-            'sequence': sequence
+            'sequence': sequence,
+            'gt_ratio': gt_ratio,        # added for stratified splitting
         })
         
         if (i + 1) % 50 == 0:
@@ -175,116 +191,95 @@ def analyze_dataset(raw_path="dataset/raw"):
     return image_metadata, date_groups
 
 
-def create_splits_with_buffers(date_groups, buffer_size=10, 
+def create_splits_with_buffers(date_groups, buffer_size=3, n_windows=3,
                                train_ratio=0.6, val_ratio=0.18, test_ratio=0.22):
     """
     Create train/val/test splits with buffer zones to prevent data leakage.
-    
-    CRITICAL STRATEGY for seasonal variation:
-    - Split EACH date separately with buffer zones
-    - Combine splits across dates so each split has both seasons
-    - This prevents both spatial leakage AND seasonal domain shift
-    
-    Example with 2 dates (winter/summer):
-      Date 1: [train] [buffer] [val] [buffer] [test]
-      Date 2: [train] [buffer] [val] [buffer] [test]
-      Final: train=D1_train+D2_train (both seasons in training!)
-    
-    Args:
-        date_groups: Dictionary of {date_str: [image_metadata]}
-        buffer_size: Number of images to skip as buffer (default: 10)
-        train_ratio: Target proportion for training (default: 0.6)
-        val_ratio: Target proportion for validation (default: 0.18)
-        test_ratio: Target proportion for testing (default: 0.22)
-        Note: Actual ratios will be lower due to buffer zones
-    
-    Returns:
-        splits: Dictionary with train, val, test lists
+
+    CHANGED to WINDOWED STRATIFICATION (fixes reviewer distribution mismatch):
+    Previously the sequential split placed test images only at the END of
+    each flight, which captured the low-coverage canopy-occluded tail region.
+    Now each date's sequence is divided into n_windows spatial windows and
+    a sequential split is applied inside each window, so test images are
+    drawn from all spatial regions of the flight path.
     """
     print(f"\n{'='*70}")
-    print("CREATING SPLITS WITH BUFFER ZONES")
-    print(f"STRATEGY: Mixed seasonal split to prevent domain shift")
+    print("CREATING STRATIFIED WINDOWED SPLITS")
+    print(f"STRATEGY: {n_windows} spatial windows per date, mixed seasonal")
     print(f"{'='*70}")
-    
-    dates = sorted(date_groups.keys())
-    
-    # Initialize combined splits
-    combined_splits = {
-        'train': [],
-        'val': [],
-        'test': [],
-        'buffers': []
-    }
-    
-    # Process each date separately
-    for date_str in dates:
-        images = sorted(date_groups[date_str], key=lambda x: x['sequence'] if x['sequence'] else 0)
+
+    combined_splits = {'train': [], 'val': [], 'test': [], 'buffers': []}
+
+    for date_str in sorted(date_groups.keys()):
+        images = sorted(date_groups[date_str],
+                        key=lambda x: x['sequence'] if x['sequence'] else 0)
         n = len(images)
-        
-        print(f"\nProcessing {date_str}: {n} images")
-        
-        # Calculate split points with buffers
-        # train | buffer | val | buffer | test
-        train_end = int(n * train_ratio)
-        buffer1_end = min(train_end + buffer_size, n)
-        val_end = min(buffer1_end + int(n * val_ratio), n)
-        buffer2_end = min(val_end + buffer_size, n)
-        
-        # Create splits for this date
-        date_train = images[:train_end]
-        date_buffer1 = images[train_end:buffer1_end]
-        date_val = images[buffer1_end:val_end]
-        date_buffer2 = images[val_end:buffer2_end]
-        date_test = images[buffer2_end:]
-        
-        # Add to combined splits
-        combined_splits['train'].extend(date_train)
-        combined_splits['val'].extend(date_val)
-        combined_splits['test'].extend(date_test)
-        combined_splits['buffers'].extend(date_buffer1)
-        combined_splits['buffers'].extend(date_buffer2)
-        
-        print(f"  Train:      {len(date_train):3d} images")
-        print(f"  Buffer 1:   {len(date_buffer1):3d} images (DISCARDED)")
-        print(f"  Val:        {len(date_val):3d} images")
-        print(f"  Buffer 2:   {len(date_buffer2):3d} images (DISCARDED)")
-        print(f"  Test:       {len(date_test):3d} images")
-    
-    # Print combined statistics
+        window_size = n // n_windows
+
+        print(f"\n  {date_str}: {n} images → {n_windows} windows of ~{window_size} each")
+
+        for w in range(n_windows):
+            w_start = w * window_size
+            w_end   = w_start + window_size if w < n_windows - 1 else n
+            window  = images[w_start:w_end]
+            wn      = len(window)
+
+            train_end   = int(wn * train_ratio)
+            buf1_end    = min(train_end + buffer_size, wn)
+            val_end     = min(buf1_end + int(wn * val_ratio), wn)
+            buf2_end    = min(val_end + buffer_size, wn)
+
+            combined_splits['train'].extend(window[:train_end])
+            combined_splits['buffers'].extend(window[train_end:buf1_end])
+            combined_splits['val'].extend(window[buf1_end:val_end])
+            combined_splits['buffers'].extend(window[val_end:buf2_end])
+            combined_splits['test'].extend(window[buf2_end:])
+
+            print(f"    Window {w+1} [{w_start}–{w_end}]: "
+                  f"train={train_end}, buf={buf1_end-train_end}, "
+                  f"val={val_end-buf1_end}, buf={buf2_end-val_end}, "
+                  f"test={wn-buf2_end}")
+
+    total      = sum(len(v) for v in combined_splits.values())
+    total_used = (len(combined_splits['train']) + len(combined_splits['val']) +
+                  len(combined_splits['test']))
+
     print(f"\n{'='*70}")
-    print(f"COMBINED SPLITS (Mixed Seasonal):")
+    print("SPLIT SUMMARY:")
     print(f"{'='*70}")
-    
-    total_used = len(combined_splits['train']) + len(combined_splits['val']) + len(combined_splits['test'])
-    total_buffer = len(combined_splits['buffers'])
-    total = total_used + total_buffer
-    
-    print(f"  Train:      {len(combined_splits['train']):4d} images ({len(combined_splits['train'])/total_used*100:5.1f}%)")
-    print(f"  Validation: {len(combined_splits['val']):4d} images ({len(combined_splits['val'])/total_used*100:5.1f}%)")
-    print(f"  Test:       {len(combined_splits['test']):4d} images ({len(combined_splits['test'])/total_used*100:5.1f}%)")
-    print(f"  Buffers:    {total_buffer:4d} images (DISCARDED)")
-    print(f"\n  Total images used: {total_used}/{total} ({total_used/total*100:.1f}%)")
-    
-    # Print seasonal distribution
-    print(f"\n{'='*70}")
-    print(f"SEASONAL DISTRIBUTION (prevents domain shift):")
-    print(f"{'='*70}")
-    
+    for sn in ['train', 'val', 'test']:
+        n = len(combined_splits[sn])
+        print(f"  {sn.capitalize():8s}: {n:4d} images ({n/total*100:.1f}%)")
+    print(f"  Buffers:  {len(combined_splits['buffers']):4d} images (DISCARDED)")
+    print(f"\n  Total used: {total_used}/{total} ({total_used/total*100:.1f}%)")
+
+    # Seasonal distribution
+    print(f"\nSEASONAL DISTRIBUTION:")
     for split_name in ['train', 'val', 'test']:
-        split_images = combined_splits[split_name]
         date_counts = {}
-        for img in split_images:
-            date_str = img['date'].strftime('%Y/%m/%d') if img['date'] else 'Unknown'
-            date_counts[date_str] = date_counts.get(date_str, 0) + 1
-        
+        for img in combined_splits[split_name]:
+            ds = img['date'].strftime('%Y/%m/%d') if img['date'] else 'Unknown'
+            date_counts[ds] = date_counts.get(ds, 0) + 1
         print(f"\n  {split_name.capitalize()}:")
-        for date_str in sorted(date_counts.keys()):
-            print(f"    {date_str}: {date_counts[date_str]:3d} images")
-    
+        for ds in sorted(date_counts):
+            print(f"    {ds}: {date_counts[ds]:3d} images")
+
+    # gt_ratio bin diagnostic
+    print(f"\nGT_RATIO BIN DISTRIBUTION:")
+    print(f"  {'Bin':<22} {'Train%':>8} {'Val%':>8} {'Test%':>8}")
+    for i, label in enumerate(BIN_LABELS):
+        lo, hi = BIN_EDGES[i], BIN_EDGES[i+1]
+        row = f"  {label:<22}"
+        for sn in ['train', 'val', 'test']:
+            imgs  = combined_splits[sn]
+            n_bin = sum(lo <= img['gt_ratio'] < hi for img in imgs)
+            row  += f" {n_bin/len(imgs)*100:>7.1f}%"
+        print(row)
+
     return {
         'train': combined_splits['train'],
-        'val': combined_splits['val'],
-        'test': combined_splits['test']
+        'val':   combined_splits['val'],
+        'test':  combined_splits['test'],
     }
 
 
