@@ -95,15 +95,6 @@ class UnifiedTrainer:
         # ── Model ─────────────────────────────────────────────────────────
         print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
 
-        # sam_ckpt = (
-        #         config.get('foundation', {})
-        #               .get('sam_checkpoints', {})
-        #               .get(variant, f'./checkpoints/sam_fpn/sam_{variant}.pth')
-        #     )
-        # print(f'  [SAM] Loading {variant} checkpoint: {sam_ckpt}')
-        # self.model = sam_model_registry[variant](checkpoint=sam_ckpt).to(self.device)
-        # print(f'  [SAM] Pretrained weights loaded ✓')
-
         model_tags = {
         'vit_b': 'facebook/sam-vit-base',
         'vit_l': 'facebook/sam-vit-large',
@@ -141,15 +132,6 @@ class UnifiedTrainer:
                                      num_workers=n_workers, 
                                      shuffle=True)
 
-
-        # self.train_loader = DataLoader(
-        #     train_ds, batch_size=batch_size, shuffle=True,
-        #     num_workers=n_workers, drop_last=False,
-        # )
-        # self.val_loader = DataLoader(
-        #     val_ds, batch_size=batch_size, shuffle=False,
-        #     num_workers=n_workers, drop_last=False,
-        # )
         print(f'  train: {len(train_ds)} samples  |  val: {len(val_ds)} samples')
         print(f'  Image size: {img_size}×{img_size}  →  SAM input: 1024×1024')
 
@@ -178,13 +160,6 @@ class UnifiedTrainer:
                 {'params': self.model.mask_decoder.parameters(),
                  'lr': base_lr, 'name': 'mask_decoder'},
         ]
-        # print(f'  [Optimizer] SAM: mask_decoder only  LR={base_lr:.1e}')
-        # print(f'    image_encoder  FROZEN  '
-        #           f'params={sum(p.numel() for p in self.model.image_encoder.parameters()):,}')
-        # print(f'    prompt_encoder FROZEN  '
-        #           f'params={sum(p.numel() for p in self.model.prompt_encoder.parameters()):,}')
-        # print(f'    mask_decoder   trainable  '
-        #           f'params={sum(p.numel() for p in self.model.mask_decoder.parameters()):,}')
 
         if opt_cfg['type'] == 'adamw':
             self.optimizer = torch.optim.AdamW(
@@ -689,7 +664,7 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_512_resized',
+            'data_root'    : './dataset/processed_512_resized/stratified',
             'image_size'   : 512,
             'augment_train': True,
         },
@@ -717,10 +692,10 @@ def get_default_config():
             'bce_weight'     : 1.0,
             'dice_weight'    : 1.0,
             'boundary_weight': 1.0,
-            'use_boundary'   : False,
+            'use_boundary'   : True,
         },
         'logging': {
-            'use_wandb'       : True,
+            'use_wandb'       : False,
             'wandb_project'   : 'river-segmentation',
             'wandb_notes'     : 'UAV river segmentation benchmark',
             'watch_model'     : False,
