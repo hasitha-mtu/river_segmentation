@@ -15,121 +15,141 @@ Reference: Kirillov et al. "Segment Anything" (2023)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, List
+from typing import List
 from segment_anything import sam_model_registry
+import os
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import matplotlib.patches as patches
+# # from torch.utils.data import Dataset
+# from pathlib import Path
+# from PIL import Image
+# from datasets import Dataset
+# import random
 
-class SAMEncoderDecoder(nn.Module):
-    """
-    SAM encoder with custom CNN decoder
-    
-    Uses SAM's ViT encoder (frozen) to extract features, then applies
-    a lightweight decoder for binary water segmentation.
-    
-    IMPORTANT: SAM's image encoder has fixed positional embeddings for 1024x1024 input.
-    Input images are always resized to 1024x1024, producing 64x64 feature maps.
-    The decoder then upsamples back to the desired output size.
-    
-    Args:
-        sam_checkpoint: Path to SAM checkpoint (.pth file)
-        model_type: SAM model type ('vit_b', 'vit_l', 'vit_h')
-        freeze_encoder: Freeze SAM encoder weights
-        decoder_channels: Base channels for decoder
-    
-    Note: Requires RGB input (3 channels) - SAM only works with RGB
-    """
-    
-    def __init__(
-        self,
-        sam_checkpoint: str = 'checkpoints/sam_vit_b_01ec64.pth',
-        model_type: str = 'vit_b',
-        freeze_encoder: bool = True,
-        decoder_channels: int = 256
-    ):
-        super().__init__()
-        
-        
-        # Load SAM model
-        print(f"Loading SAM model: {model_type}")
-        self.sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-        self.image_encoder = self.sam.image_encoder
-        
-        print(f"✓ SAM encoder loaded from {sam_checkpoint}")
-        
-        # Freeze encoder
-        if freeze_encoder:
-            for param in self.image_encoder.parameters():
-                param.requires_grad = False
-            print("✓ SAM encoder frozen")
-        
-        # SAM encoder output: 256 channels at 64x64 for 1024x1024 input
-        # MUST use 1024x1024 input due to fixed positional embeddings
-        sam_out_channels = 256
-        
-        # Lightweight decoder: 64x64 -> 512x512 (8x upsampling, 3 stages)
-        self.decoder = nn.Sequential(
-            # 64x64 -> 128x128
-            nn.ConvTranspose2d(sam_out_channels, decoder_channels, 3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(decoder_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(decoder_channels, decoder_channels, 3, padding=1),
-            nn.BatchNorm2d(decoder_channels),
-            nn.ReLU(inplace=True),
-            
-            # 128x128 -> 256x256
-            nn.ConvTranspose2d(decoder_channels, decoder_channels // 2, 3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(decoder_channels // 2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(decoder_channels // 2, decoder_channels // 2, 3, padding=1),
-            nn.BatchNorm2d(decoder_channels // 2),
-            nn.ReLU(inplace=True),
-            
-            # 256x256 -> 512x512
-            nn.ConvTranspose2d(decoder_channels // 2, decoder_channels // 4, 3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(decoder_channels // 4),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(decoder_channels // 4, decoder_channels // 4, 3, padding=1),
-            nn.BatchNorm2d(decoder_channels // 4),
-            nn.ReLU(inplace=True),
-            
-            # Final prediction
-            nn.Conv2d(decoder_channels // 4, 1, 1),
-            nn.Sigmoid()
-        )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass
-        
-        Args:
-            x: RGB input (B, 3, H, W)
-        
-        Returns:
-            Segmentation mask (B, 1, H, W)
-        """
-        if x.shape[1] != 3:
-            raise ValueError(f"SAM requires RGB input (3 channels), got {x.shape[1]} channels")
-        
-        B, C, H, W = x.shape
-        original_size = (H, W)
-        
-        # SAM REQUIRES 1024x1024 input (fixed positional embeddings)
-        # Cannot use smaller sizes without modifying the encoder
-        sam_input_size = 1024
-        x_resized = F.interpolate(x, size=(sam_input_size, sam_input_size), mode='bilinear', align_corners=False)
-        
-        # SAM encoder (frozen, no gradients needed)
-        with torch.no_grad():
-            features = self.image_encoder(x_resized)  # B, 256, 64, 64
-        
-        # Decode: 64x64 -> 512x512
-        output = self.decoder(features)  # B, 1, 512, 512
-        
-        # Resize to original size if needed
-        if output.shape[2:] != original_size:
-            output = F.interpolate(output, size=original_size, mode='bilinear', align_corners=False)
-        
-        return output
+# def create_dataset(data_dir, split):
+#     data_dir = Path(data_dir) / split
+#     print(f'data_dir: {data_dir}')
+#     images_dir = data_dir / "images"
+#     print(f'images_dir: {images_dir}')
+#     masks_dir = data_dir / "masks"
+#     print(f'masks_dir: {masks_dir}')
+#     image_paths = sorted(list(images_dir.glob("*.jpg")))
+#     dataset_dict = {
+#         "image": [np.array(Image.open(image_path).convert('RGB')) for image_path in image_paths],
+#         "label": [np.array(Image.open(masks_dir / f"{image_path.stem}.png").convert('L')) for image_path in image_paths]
+#         }
+#     dataset = Dataset.from_dict(dataset_dict)
+#     print(dataset.shape)
+#     return dataset
 
+# def view_sample_from_dataset(dataset):
+#     img_num = random.randint(0, dataset.shape[0]-1)
+#     example_image = dataset[img_num]["image"]
+#     example_mask = dataset[img_num]["label"]
+
+#     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+#     # Plot the first image on the left
+#     axes[0].imshow(np.array(example_image), cmap='gray')  # Assuming the first image is grayscale
+#     axes[0].set_title("Image")
+
+#     # Plot the second image on the right
+#     axes[1].imshow(example_mask, cmap='gray')  # Assuming the second image is grayscale
+#     axes[1].set_title("Mask")
+
+#     # Hide axis ticks and labels
+#     for ax in axes:
+#         ax.set_xticks([])
+#         ax.set_yticks([])
+#         ax.set_xticklabels([])
+#         ax.set_yticklabels([])
+
+#     # Display the images side by side
+#     plt.show()
+     
+
+# class SAMDataset(Dataset):
+#   """
+#   This class is used to create a dataset that serves input images and masks.
+#   It takes a dataset and a processor as input and overrides the __len__ and __getitem__ methods of the Dataset class.
+#   """
+#   def __init__(self, dataset, processor):
+#     self.dataset = dataset
+#     self.processor = processor
+
+#   def __len__(self):
+#     return len(self.dataset)
+
+#   def __getitem__(self, idx):
+#     item = self.dataset[idx]
+#     image = item["image"]
+#     ground_truth_mask = np.array(item["label"])
+
+#     # get bounding box prompt
+#     prompt = get_bounding_box(ground_truth_mask)
+
+#     # prepare image and prompt for the model
+#     inputs = self.processor(image, input_boxes=[[prompt]], return_tensors="pt")
+
+#     # remove batch dimension which the processor adds by default
+#     inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+#     # add ground truth segmentation
+#     inputs["ground_truth_mask"] = ground_truth_mask
+
+#     return inputs
+  
+# #Get bounding boxes from mask.
+# def get_bounding_box(ground_truth_map):
+#   # get bounding box from mask
+#   y_indices, x_indices = np.where(ground_truth_map > 0)
+#   # Check if mask is empty
+#   if len(x_indices) == 0:
+#     # Return a dummy box or a box covering the whole image
+#     # Standard practice: return [0, 0, W, H] or a specific flag
+#     return [0, 0, ground_truth_map.shape[1], ground_truth_map.shape[0]]
+#   x_min, x_max = np.min(x_indices), np.max(x_indices)
+#   y_min, y_max = np.min(y_indices), np.max(y_indices)
+#   # add perturbation to bounding box coordinates
+#   H, W = ground_truth_map.shape
+#   x_min = max(0, x_min - np.random.randint(0, 20))
+#   x_max = min(W, x_max + np.random.randint(0, 20))
+#   y_min = max(0, y_min - np.random.randint(0, 20))
+#   y_max = min(H, y_max + np.random.randint(0, 20))
+#   bbox = [x_min, y_min, x_max, y_max]
+
+#   return bbox
+
+# def visualize_bbox_perturbation(image, mask, n_samples=3):
+#     """
+#     Visualizes the river image, mask, and the perturbed bounding box.
+#     """
+#     fig, axes = plt.subplots(1, n_samples, figsize=(18, 6))
+    
+#     for i in range(n_samples):
+#         # Generate box using your function
+#         bbox = get_bounding_box(mask) # [x_min, y_min, x_max, y_max]
+        
+#         axes[i].imshow(image)
+#         # Overlay the mask with low opacity
+#         axes[i].imshow(mask, alpha=0.3, cmap='Blues')
+        
+#         # Create a Rectangle patch
+#         # Rectangle expects (x, y), width, height
+#         rect = patches.Rectangle(
+#             (bbox[0], bbox[1]), 
+#             bbox[2] - bbox[0], 
+#             bbox[3] - bbox[1], 
+#             linewidth=2, edgecolor='r', facecolor='none', linestyle='--'
+#         )
+        
+#         axes[i].add_patch(rect)
+#         axes[i].set_title(f"Perturbed BBox Analysis {i+1}")
+#         axes[i].axis('off')
+
+#     plt.tight_layout()
+#     plt.show()
 
 class SAMFineTuned(nn.Module):
     """
@@ -290,6 +310,119 @@ class SAMFineTuned(nn.Module):
         
         return masks
 
+class SAMEncoderDecoder(nn.Module):
+    """
+    SAM encoder with custom CNN decoder
+    
+    Uses SAM's ViT encoder (frozen) to extract features, then applies
+    a lightweight decoder for binary water segmentation.
+    
+    IMPORTANT: SAM's image encoder has fixed positional embeddings for 1024x1024 input.
+    Input images are always resized to 1024x1024, producing 64x64 feature maps.
+    The decoder then upsamples back to the desired output size.
+    
+    Args:
+        sam_checkpoint: Path to SAM checkpoint (.pth file)
+        model_type: SAM model type ('vit_b', 'vit_l', 'vit_h')
+        freeze_encoder: Freeze SAM encoder weights
+        decoder_channels: Base channels for decoder
+    
+    Note: Requires RGB input (3 channels) - SAM only works with RGB
+    """
+    
+    def __init__(
+        self,
+        sam_checkpoint: str = 'checkpoints/sam_vit_b_01ec64.pth',
+        model_type: str = 'vit_b',
+        freeze_encoder: bool = True,
+        decoder_channels: int = 256
+    ):
+        super().__init__()
+        
+        
+        # Load SAM model
+        print(f"Loading SAM model: {model_type}")
+        self.sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+        self.image_encoder = self.sam.image_encoder
+        
+        print(f"✓ SAM encoder loaded from {sam_checkpoint}")
+        
+        # Freeze encoder
+        if freeze_encoder:
+            for param in self.image_encoder.parameters():
+                param.requires_grad = False
+            print("✓ SAM encoder frozen")
+        
+        # SAM encoder output: 256 channels at 64x64 for 1024x1024 input
+        # MUST use 1024x1024 input due to fixed positional embeddings
+        sam_out_channels = 256
+        
+        # Lightweight decoder: 64x64 -> 512x512 (8x upsampling, 3 stages)
+        self.decoder = nn.Sequential(
+            # 64x64 -> 128x128
+            nn.ConvTranspose2d(sam_out_channels, decoder_channels, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels, decoder_channels, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+            
+            # 128x128 -> 256x256
+            nn.ConvTranspose2d(decoder_channels, decoder_channels // 2, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels // 2, decoder_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels // 2),
+            nn.ReLU(inplace=True),
+            
+            # 256x256 -> 512x512
+            nn.ConvTranspose2d(decoder_channels // 2, decoder_channels // 4, 3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(decoder_channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(decoder_channels // 4, decoder_channels // 4, 3, padding=1),
+            nn.BatchNorm2d(decoder_channels // 4),
+            nn.ReLU(inplace=True),
+            
+            # Final prediction
+            nn.Conv2d(decoder_channels // 4, 1, 1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+        
+        Args:
+            x: RGB input (B, 3, H, W)
+        
+        Returns:
+            Segmentation mask (B, 1, H, W)
+        """
+        if x.shape[1] != 3:
+            raise ValueError(f"SAM requires RGB input (3 channels), got {x.shape[1]} channels")
+        
+        B, C, H, W = x.shape
+        original_size = (H, W)
+        
+        # SAM REQUIRES 1024x1024 input (fixed positional embeddings)
+        # Cannot use smaller sizes without modifying the encoder
+        sam_input_size = 1024
+        x_resized = F.interpolate(x, size=(sam_input_size, sam_input_size), mode='bilinear', align_corners=False)
+        
+        # SAM encoder (frozen, no gradients needed)
+        with torch.no_grad():
+            features = self.image_encoder(x_resized)  # B, 256, 64, 64
+        
+        # Decode: 64x64 -> 512x512
+        output = self.decoder(features)  # B, 1, 512, 512
+        
+        # Resize to original size if needed
+        if output.shape[2:] != original_size:
+            output = F.interpolate(output, size=original_size, mode='bilinear', align_corners=False)
+        
+        return output
+
+
 class SAM_FPN_Decoder(nn.Module):
     """
     Improved FPN Decoder for SAM.
@@ -403,11 +536,13 @@ class SAMEncoderDecoderFPN(nn.Module):
         return output
     
 def build_sam_fpn_segmentation(variant, in_channels, num_classes):
+    print(f'Current working dir: {os.getcwd()}')
     paths = {
         'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
         'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
         'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth'
     }
+
     checkpoint_path = paths.get(variant)
     return SAMEncoderDecoderFPN(
             sam_checkpoint=checkpoint_path,
@@ -419,6 +554,18 @@ def build_sam_fpn_segmentation(variant, in_channels, num_classes):
     #         sam_checkpoint=checkpoint_path,
     #         model_type=variant
     #     )
+
+def build_sam_finetuned_segmentation(variant, in_channels, num_classes):
+    paths = {
+        'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
+        'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
+        'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth'
+    }
+    checkpoint_path = paths.get(variant)
+    return SAMFineTuned(
+            sam_checkpoint=checkpoint_path,
+            model_type=variant
+        )
 
 def build_sam_segmentation(variant, in_channels, num_classes):
     paths = {
@@ -439,21 +586,3 @@ def build_sam_segmentation(variant, in_channels, num_classes):
     #     )
 
 
-if __name__ == '__main__':
-    print("SAM Models Test")
-    print("="*70)
-    print("\nNote: These models require:")
-    print("1. segment_anything package installed")
-    print("2. SAM checkpoint downloaded to checkpoints/")
-    print("3. RGB input only (3 channels)")
-    print("\nSkipping actual model creation in test mode")
-    print("Use in training script with proper setup")
-    
-    # Test basic structure without loading actual SAM
-    print("\n✓ SAM model definitions ready")
-    print("\nTo use SAM models:")
-    print("1. Download SAM checkpoint:")
-    print("   wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P checkpoints/")
-    print("2. Install segment_anything:")
-    print("   pip install git+https://github.com/facebookresearch/segment-anything.git")
-    print("3. Use in training with RGB feature_config")

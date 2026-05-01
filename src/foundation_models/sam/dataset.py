@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 from transformers import SamProcessor
 import torch.nn.functional as F
 from src.utils.losses import get_loss_function
+import cv2
+import os
 
 def create_dataset(data_dir, split):
     data_dir = Path(data_dir) / split
@@ -27,6 +29,78 @@ def create_dataset(data_dir, split):
     dataset = InitialDataset.from_dict(dataset_dict)
     print(dataset.shape)
     return dataset
+
+# def create_sam2_dataset(data_dir, split, batch_size):
+#     data_dir = f'{data_dir}/{split}'
+#     print(f'data_dir: {data_dir}')
+#     data=[]
+#     for ff, name in enumerate(os.listdir(data_dir+"/images/")):  # go over all folder annotation
+#         image_path = data_dir+"/images/"+name
+#         mask_path = data_dir+"/masks/"+name[:-4]+".png"
+#         image, mask, points, labels_size = format_dataset_item(image_path, mask_path)
+#         data.append({
+#             'image': image,
+#             'mask': mask,
+#             'points': points,
+#             'labels_size': labels_size
+#         })
+#     return data
+
+
+def create_sam2_dataset(data_dir, split, batch_size):
+    data_dir = f'{data_dir}/{split}'
+    print(f'data_dir: {data_dir} and split: {split}')
+
+    data = []
+
+    for ff, name in enumerate(os.listdir(data_dir + "/images/")):
+        image_path = data_dir + "/images/" + name
+        mask_path = data_dir + "/masks/" + name[:-4] + ".png"
+
+        image, mask, points, labels_size = format_dataset_item(image_path, mask_path)
+
+        data.append({
+            'image': image,
+            'mask': mask,
+            'points': points,
+            'labels_size': labels_size
+        })
+
+    batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+    return batches
+
+def format_dataset_item(image_path,  mask_path):
+    img = cv2.imread(image_path)[..., ::-1]  # read image
+    ann_map = cv2.imread(mask_path)  # read annotation
+
+    # resize image
+    r = np.min([512 / img.shape[1], 512 / img.shape[0]])  # scalling factor
+    img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
+    ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)),
+                         interpolation=cv2.INTER_NEAREST)
+
+    # merge vessels and materials annotations
+    mat_map = ann_map[:, :, 0]  # material annotation map
+    ves_map = ann_map[:, :, 2]  # vessel  annotaion map
+
+    offset = mat_map.max()
+    merge_mask = (mat_map == 0) & (ves_map > 0)
+    mat_map[merge_mask] = ves_map[merge_mask] + offset
+
+    # Get binary masks and points
+    inds = np.unique(mat_map)
+    inds = inds[inds > 0]
+
+    points = []
+    masks = []
+    for ind in inds:
+        mask = (mat_map == ind).astype(np.uint8)  # make binary mask
+        masks.append(mask)
+        coords = np.argwhere(mask > 0)  # get all coordinates in mask
+        yx = np.array(coords[np.random.randint(len(coords))])  # choose random point/coordinate
+        points.append([[yx[1], yx[0]]])
+
+    return img, np.array(masks), np.array(points), len(masks)
     
 
 def view_sample_from_dataset(dataset):
@@ -136,6 +210,69 @@ def visualize_bbox_perturbation(image, mask, n_samples=3):
 
     plt.tight_layout()
     plt.show()
+
+class SAM2Dataset(Dataset):
+    def __init__(self, data_list):
+        self.data_list = data_list
+
+    def __len__(self):
+        return len(self.data_list)
+
+    def __getitem__(self, idx):
+        # Use your existing logic (or a modified version of read_batch)
+        # We return a single item here; DataLoader will batch them
+        img, masks, points, labels = read_batch([self.data_list[idx]]) 
+        
+        # Convert to Tensors
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        mask_tensor = torch.from_numpy(masks).float()
+        point_tensor = torch.from_numpy(points).float()
+        label_tensor = torch.from_numpy(labels).float()
+
+        # return {
+        #     'img': img_tensor,
+        #     'mask': mask_tensor,
+        #     'point': point_tensor,
+        #     'label': label_tensor
+        # }
+        return img, masks, points, labels
+
+        # return img_tensor, mask_tensor, point_tensor, label_tensor
+
+# [{'image': './dataset/processed_512_resized/stratified/train/images/DJI_20250324094700_0120_V.jpg', 'annotation': './dataset/processed_512_resized/stratified/train/masks/DJI_20250324094700_0120_V.png'}]
+def read_batch(item): 
+    image_path = item[0]['image']
+    mask_path = item[0]['annotation']
+    img = cv2.imread(image_path)[...,::-1]  # read image
+    ann_map = cv2.imread(mask_path) # read annotation
+
+   # resize image
+    r = np.min([512 / img.shape[1], 512 / img.shape[0]]) # scalling factor
+    img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
+    ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)),interpolation=cv2.INTER_NEAREST)
+
+   # merge vessels and materials annotations
+    mat_map = ann_map[:,:,0] # material annotation map
+    ves_map = ann_map[:,:,2] # vessel  annotaion map
+
+    offset = mat_map.max()
+    merge_mask = (mat_map == 0) & (ves_map > 0)
+    mat_map[merge_mask] = ves_map[merge_mask] + offset
+
+    # Get binary masks and points
+    inds = np.unique(mat_map)
+    inds = inds[inds > 0]
+
+    points= []
+    masks = [] 
+    for ind in inds:
+        mask=(mat_map == ind).astype(np.uint8) # make binary mask
+        masks.append(mask)
+        coords = np.argwhere(mask > 0) # get all coordinates in mask
+        yx = np.array(coords[np.random.randint(len(coords))]) # choose random point/coordinate
+        points.append([[yx[1], yx[0]]])
+        
+    return img, np.array(masks), np.array(points), np.ones([len(masks),1])
 
 if __name__ == '__main__':
     # FIX 2: Use raw string for Windows paths to avoid SyntaxWarning
