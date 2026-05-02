@@ -245,9 +245,8 @@ class UnifiedTrainer:
     def setup_directories(self):
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
-        loss_type  = self.config['loss']['type']
 
-        exp_name = f'{model_name}_{variant}_{loss_type}' if variant else f'{model_name}_{loss_type}'
+        exp_name = f'{model_name}_{variant}' if variant else f'{model_name}'
 
         output_dir          = self.config['system']['output_dir']
         self.model_dir      = os.path.join(output_dir, model_name)

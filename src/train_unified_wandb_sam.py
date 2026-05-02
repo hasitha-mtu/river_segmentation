@@ -274,9 +274,8 @@ class UnifiedTrainer:
     def setup_directories(self):
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
-        loss_type  = self.config['loss']['type']
 
-        exp_name = f'{model_name}_{variant}_{loss_type}' if variant else f'{model_name}_{loss_type}'
+        exp_name = f'{model_name}_{variant}' if variant else f'{model_name}'
 
         output_dir          = self.config['system']['output_dir']
         self.model_dir      = os.path.join(output_dir, model_name)
@@ -664,13 +663,13 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_512_resized/stratified',
+            'data_root'    : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/dataset/processed_512_resized/stratified',
             'image_size'   : 512,
             'augment_train': True,
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 100,
+            'epochs'    : 1,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -705,7 +704,7 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            'output_dir'   : './experiments',
+            'output_dir'   : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/experiments',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -717,9 +716,9 @@ def get_default_config():
             #   vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
             #   vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
             'sam_checkpoints': {
-                'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
-                'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
-                'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth',
+                'vit_b':  r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
+                'vit_l':  r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
+                'vit_h':  r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth',
             },
         },
     }
@@ -744,7 +743,7 @@ def train_single_model(config: dict):
 def train_all_models(base_config: dict):
     """Train all SAM variants sequentially."""
     all_models = {
-        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_fpn': ['vit_b', 'vit_l', 'vit_h'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran

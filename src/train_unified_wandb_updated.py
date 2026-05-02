@@ -21,15 +21,11 @@ The GlobalLocalWrapper's fusion head learns to gate between the two views:
 
 import os
 import re
-import time
 import json
 from pathlib import Path
-from datetime import datetime
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.backends.cudnn as cudnn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from PIL import Image
@@ -41,9 +37,8 @@ from models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
-from wrapper import GlobalLocalWrapper
-from torchviz import make_dot
-import inspect
+from src.train_unified_wandb_sam import train_single_model as train_single_model_sam_fpn
+from src.train_unified_wandb_sam2_1 import train_single_model as train_single_model_sam2
 
 # SAM-specific imports — only required when training SAM variants.
 # If segment_anything is not installed and SAM is not being trained, these
@@ -648,9 +643,8 @@ class UnifiedTrainer:
     def setup_directories(self):
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
-        loss_type  = self.config['loss']['type']
 
-        exp_name = f'{model_name}_{variant}_{loss_type}' if variant else f'{model_name}_{loss_type}'
+        exp_name = f'{model_name}_{variant}' if variant else f'{model_name}'
 
         output_dir           = self.config['system']['output_dir']
         self.model_dir       = os.path.join(output_dir, model_name)
@@ -723,22 +717,30 @@ class UnifiedTrainer:
             loss_dict = {'total': main_loss.item()}
 
         if aux_out is not None:
-            g_logits, l_logits = aux_out
-            if self.config['loss']['type'] == 'combined':
-                g_loss, _ = self.criterion(g_logits, masks, None)
-                l_loss, _ = self.criterion(l_logits, masks, None)
+            if type(aux_out) == torch.Tensor:
+                aux_loss, _ = self.criterion(aux_out, masks, None)
+                total = main_loss + self.aux_weight * aux_loss
+
+                loss_dict['main_loss'] = main_loss.item()
+                loss_dict['total'] = total.item()
+                return total, loss_dict
             else:
-                g_loss = self.criterion(g_logits, masks)
-                l_loss = self.criterion(l_logits, masks)
+                g_logits, l_logits = aux_out
+                if self.config['loss']['type'] == 'combined':
+                    g_loss, _ = self.criterion(g_logits, masks, None)
+                    l_loss, _ = self.criterion(l_logits, masks, None)
+                else:
+                    g_loss = self.criterion(g_logits, masks)
+                    l_loss = self.criterion(l_logits, masks)
 
-            aux_loss = (g_loss + l_loss) / 2.0
-            total    = main_loss + self.aux_weight * aux_loss
+                aux_loss = (g_loss + l_loss) / 2.0
+                total    = main_loss + self.aux_weight * aux_loss
 
-            loss_dict['main_loss']   = main_loss.item()
-            loss_dict['global_aux']  = g_loss.item()
-            loss_dict['local_aux']   = l_loss.item()
-            loss_dict['total']       = total.item()
-            return total, loss_dict
+                loss_dict['main_loss']   = main_loss.item()
+                loss_dict['global_aux']  = g_loss.item()
+                loss_dict['local_aux']   = l_loss.item()
+                loss_dict['total']       = total.item()
+                return total, loss_dict
 
         return main_loss, loss_dict
 
@@ -937,7 +939,9 @@ class UnifiedTrainer:
 
                 if log_samples and len(sample_images) < max_samples:
                     # Log local patch as the primary image
-                    sample_images.append(batch['image'][0].cpu())
+                    img_key = 'pixel_values' if self.is_sam else 'image'
+                    sample_images.append(batch[img_key][0].cpu())
+                    # sample_images.append(batch['image'][0].cpu())
                     sample_masks.append(masks[0].cpu())
                     sample_preds.append(preds[0].cpu())
 
@@ -1167,13 +1171,13 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_512_resized',
+            'data_root'    : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/dataset/processed_512_resized',
             'image_size'   : 512,
             'augment_train': True
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 100,
+            'epochs'    : 1,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -1199,7 +1203,7 @@ def get_default_config():
             'aux_weight'     : 0.4,  # GlobalLocal: weight for auxiliary branch losses
         },
         'logging': {
-            'use_wandb'       : True,
+            'use_wandb'       : False,
             'wandb_project'   : 'river-segmentation',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
@@ -1209,7 +1213,7 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            'output_dir'   : './experiments',
+            'output_dir'   : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/experiments',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1225,9 +1229,9 @@ def get_default_config():
             #   vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
             #   vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
             'sam_checkpoints': {
-                'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
-                'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
-                'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth',
+                'vit_b': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
+                'vit_l': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
+                'vit_h': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth',
             },
             # DINOv2 is auto-downloaded via torch.hub — no checkpoint paths needed.
         },
@@ -1253,30 +1257,52 @@ def train_single_model(config: dict):
 def train_all_models(base_config: dict):
     """Train all SAM variants (and optionally DINOv2) sequentially."""
 
+    # all_models = {
+    #     # CNN baselines
+    #     'unet'              : [],
+    #     'unetpp'            : [],
+    #     'resunetpp'         : [],
+    #     'deeplabv3plus'     : [],
+    #     'deeplabv3plus_cbam': [],
+    #     # Transformers
+    #     'segformer'         : ['b0', 'b2'],
+    #     'swin_unet'         : ['tiny'],
+    #     # Hybrid SOTA
+    #     'convnext_upernet'  : ['tiny', 'small', 'base'],
+    #     'hrnet_ocr'         : ['w18', 'w32', 'w48'],
+    #     # # Foundation models
+    #     'sam'               : ['vit_b', 'vit_l', 'vit_h'],
+    #     'sam_fpn'           : ['vit_b', 'vit_l', 'vit_h'],
+    #     'dinov2'            : ['vit_s', 'vit_b', 'vit_l',],
+    #     'sam2'              : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
+    # }
+
     all_models = {
-        # CNN baselines
-        'unet'           : [],
-        'unetpp'         : [],
-        'resunetpp'      : [],
-        'deeplabv3plus'  : [],
-        'deeplabv3plus_cbam': [],
-        # Transformers
-        'segformer'      : ['b0', 'b2'],
-        'swin_unet'      : ['tiny'],
-        # Hybrid SOTA
-        'convnext_upernet': ['tiny', 'small', 'base'],
-        'hrnet_ocr'      : ['w18', 'w32', 'w48'],
-        # # Foundation models
-        # 'sam'            : ['vit_b', 'vit_l', 'vit_h'],
-        # 'sam_fpn'        : ['vit_b', 'vit_l', 'vit_h'],
-        # 'dinov2'         : ['vit_s', 'vit_b', 'vit_l',],
+        # # CNN baselines
+        # 'unet': [],
+        # 'unetpp': [],
+        # 'resunetpp': [],
+        # 'deeplabv3plus': [],
+        # 'deeplabv3plus_cbam': [],
+        # # Transformers
+        # 'segformer': ['b0'],
+        # 'swin_unet': ['tiny'],
+        # # Hybrid SOTA
+        # 'convnext_upernet': ['tiny'],
+        # 'hrnet_ocr': ['w18'],
+        # # # Foundation models
+        # 'sam': ['vit_b'],
+        'sam_fpn': ['vit_b'],
+        # 'dinov2': ['vit_s'],
+        # 'sam2': ['sam2.1_hiera_tiny'],
     }
+
 
     # Foundation models use early stopping to prevent overfitting on the
     # 274-image training set given their large parameter counts (91M–632M).
     # All other benchmark models trained with fixed 100 epochs — this
     # asymmetry is documented in the paper's training details table.
-    FOUNDATION_MODELS = {'sam', 'dinov2'}
+    FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam2'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
@@ -1296,8 +1322,12 @@ def train_all_models(base_config: dict):
                     'early_stopping_patience' : 20,
                     'early_stopping_min_delta': 1e-4,
                 }
-
-            train_single_model(config)
+            if model_name == 'sam_fpn':
+                train_single_model_sam_fpn(config)
+            elif model_name == 'sam2':
+                train_single_model_sam2(config)
+            else:
+                train_single_model(config)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1308,16 +1338,18 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    default_config = get_default_config()
-    print(f'default_config: {default_config}')
-    print(f'data_root: {default_config['data']['data_root']}')
-    print(f'epochs: {default_config['training']['epochs']}')
-    print(f'output_dir: {default_config['system']['output_dir']}')
-
-    # default_config['training']['epochs'] = 1
-
     dataset_variations  = ['sequential', 'stratified', 'alternative']
     for dataset_variation in dataset_variations:
+
+        default_config = get_default_config()
+        print(f'default_config: {default_config}')
+        print(f'data_root: {default_config['data']['data_root']}')
+        print(f'epochs: {default_config['training']['epochs']}')
+        print(f'output_dir: {default_config['system']['output_dir']}')
+
+        default_config['training']['epochs'] = 1
+        default_config['logging']['use_wandb'] = False
+
         data_root = default_config['data']['data_root']
         data_root = f'{data_root}/{dataset_variation}'
         output_dir = default_config['system']['output_dir']
