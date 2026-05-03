@@ -37,8 +37,8 @@ from models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
-from src.train_unified_wandb_sam import train_single_model as train_single_model_sam_fpn
-from src.train_unified_wandb_sam2_1 import train_single_model as train_single_model_sam2
+from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_fpn
+from src.train_unified_wandb_sam_v2_1 import train_single_model as train_single_model_sam_v2_fine_tuned
 
 # SAM-specific imports — only required when training SAM variants.
 # If segment_anything is not installed and SAM is not being trained, these
@@ -1272,7 +1272,7 @@ def train_all_models(base_config: dict):
     #     'sam'               : ['vit_b', 'vit_l', 'vit_h'],
     #     'sam_fpn'           : ['vit_b', 'vit_l', 'vit_h'],
     #     'dinov2'            : ['vit_s', 'vit_b', 'vit_l',],
-    #     'sam2'              : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
+    #     'sam_v2_fine_tuned' : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     # }
 
     all_models = {
@@ -1290,9 +1290,9 @@ def train_all_models(base_config: dict):
         # 'hrnet_ocr': ['w18'],
         # # # Foundation models
         # 'sam': ['vit_b'],
-        'sam_fpn': ['vit_b'],
+        # 'sam_fpn': ['vit_b'],
         # 'dinov2': ['vit_s'],
-        # 'sam2': ['sam2.1_hiera_tiny'],
+        'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     }
 
 
@@ -1300,7 +1300,7 @@ def train_all_models(base_config: dict):
     # 274-image training set given their large parameter counts (91M–632M).
     # All other benchmark models trained with fixed 100 epochs — this
     # asymmetry is documented in the paper's training details table.
-    FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam2'}
+    FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam_v2_fine_tuned'}
 
     for model_name, variants in all_models.items():
         print(f'train_all_models|model_name: {model_name}, variants:{variants}')
@@ -1321,10 +1321,8 @@ def train_all_models(base_config: dict):
                     'early_stopping_patience' : 20,
                     'early_stopping_min_delta': 1e-4,
                 }
-            # if model_name == 'sam_fpn':
-            #     train_single_model_sam_fpn(config)
-            if model_name == 'sam2':
-                train_single_model_sam2(config)
+            if model_name == 'sam_v2_fine_tuned':
+                train_single_model_sam_v2_fine_tuned(config)
             else:
                 print(f'train_single_model|model_name: {model_name}')
                 train_single_model(config)
