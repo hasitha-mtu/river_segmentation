@@ -376,6 +376,7 @@ class SAMDataset(Dataset):
 class UnifiedTrainer:
 
     def __init__(self, config: dict):
+        print(f'  UnifiedTrainer model_name: {config['model']['name']}')
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -1022,10 +1023,6 @@ class UnifiedTrainer:
             if self.use_wandb and self.config['logging'].get('save_model_wandb', False):
                 wandb.save(best_path)
 
-        save_interval = self.config['system'].get('save_interval', 10)
-        if epoch % save_interval == 0:
-            torch.save(checkpoint, os.path.join(self.checkpoint_dir, f'epoch_{epoch}.pth'))
-
     def load_checkpoint(self):
         path = os.path.join(self.checkpoint_dir, 'latest.pth')
         if os.path.exists(path):
@@ -1255,6 +1252,7 @@ def train_single_model(config: dict):
 
 
 def train_all_models(base_config: dict):
+    print(f'train_all_models|base_config: {base_config}')
     """Train all SAM variants (and optionally DINOv2) sequentially."""
 
     # all_models = {
@@ -1305,6 +1303,7 @@ def train_all_models(base_config: dict):
     FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam2'}
 
     for model_name, variants in all_models.items():
+        print(f'train_all_models|model_name: {model_name}, variants:{variants}')
         for variant in (variants or [None]):
             tag = f'{model_name}' + (f' - {variant}' if variant else '')
             print(f'\n{"="*80}\nTraining {tag}\n{"="*80}\n')
@@ -1322,11 +1321,12 @@ def train_all_models(base_config: dict):
                     'early_stopping_patience' : 20,
                     'early_stopping_min_delta': 1e-4,
                 }
-            if model_name == 'sam_fpn':
-                train_single_model_sam_fpn(config)
-            elif model_name == 'sam2':
+            # if model_name == 'sam_fpn':
+            #     train_single_model_sam_fpn(config)
+            if model_name == 'sam2':
                 train_single_model_sam2(config)
             else:
+                print(f'train_single_model|model_name: {model_name}')
                 train_single_model(config)
 
             if torch.cuda.is_available():
