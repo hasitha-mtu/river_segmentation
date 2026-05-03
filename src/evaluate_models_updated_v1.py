@@ -40,8 +40,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from models import get_model
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from src.train_unified_wandb_sam import get_sam_fpn_dataset
-from src.train_unified_wandb_sam2_1 import get_sam2_dataset
+from src.train_unified_wandb_sam_v2_1 import get_sam2_dataset
 
 try:
     from segment_anything import sam_model_registry
@@ -123,7 +122,7 @@ class SAMTestDataset(Dataset):
     """
     Test dataset for SAM models.
 
-    MUST mirror the preprocessing in SAMDataset (train_unified_wandb_sam.py)
+    MUST mirror the preprocessing in SAMDataset (train_unified_wandb_sam_v1.py)
     exactly — using ImageNet normalisation here would silently corrupt every
     metric because the model was never exposed to those statistics.
 
@@ -355,9 +354,10 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device, ckpt
     variant    = config['model'].get('variant', None)
     n_channels = config['model'].get('n_channels', 3)
     n_classes  = config['model'].get('n_classes',  1)
-
+    predictor = None
+    print(f'Build model_name : {model_name}')
     if model_name == 'sam':
-        # The training script (train_unified_wandb_sam.py) saves a raw
+        # The training script (train_unified_wandb_sam_v1.py) saves a raw
         # sam_model_registry[variant] object.  Its state-dict keys are:
         #   image_encoder.*, prompt_encoder.*, mask_decoder.*
         #
@@ -373,7 +373,7 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device, ckpt
         print(f'  [SAM] Rebuilding {variant} from: {sam_ckpt}')
         model = sam_model_registry[variant](checkpoint=sam_ckpt)
         model.load_state_dict(ckpt['model_state_dict'])
-    elif model_name == 'sam2':
+    elif model_name == 'sam_v2_fine_tuned':
         ckpt_base = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2'
         variant_map = {
             'sam2.1_hiera_tiny': ('configs/sam2.1/sam2.1_hiera_t.yaml', 'sam2.1_hiera_tiny.pt'),
@@ -381,13 +381,28 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device, ckpt
             'sam2.1_hiera_base_plus': ('configs/sam2.1/sam2.1_hiera_b+.yaml', 'sam2.1_hiera_base_plus.pt'),
         }
         cfg_file, ckpt_file = variant_map[variant]
-        model = build_sam2(
-            config_file=cfg_file,
-            ckpt_path=os.path.join(ckpt_base, ckpt_file),
-            device='cuda',
-        )
+        print(f'Build model from config file: {cfg_file}')
+        # model = build_sam2(
+        #     config_file=cfg_file,
+        #     ckpt_path=os.path.join(ckpt_base, ckpt_file),
+        #     device='cuda',
+        # )
+        # print(f'Build predictor for model: {model_name}')
         # predictor = SAM2ImagePredictor(model)
+        # print(f'Loading weights from checkpoint: {ckpt_path}')
         # predictor = predictor.model.load_state_dict(torch.load(ckpt_path))
+
+        # FINE_TUNED_MODEL_WEIGHTS = r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\experiments\sam2\sam2_sam2.1_hiera_tiny\checkpoints\best.pth'
+        # sam2_checkpoint = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_tiny.pt'
+        # model_cfg = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_t.yaml'
+
+        # Build net and load weights
+        model = build_sam2(config_file=cfg_file,
+                           ckpt_path=os.path.join(ckpt_base, ckpt_file),
+                           device="cuda")  # load model
+        predictor = SAM2ImagePredictor(model)
+        predictor.model.load_state_dict(ckpt['model_state_dict'])
+
     else:
         model = get_model(
             model_name = model_name,
@@ -399,7 +414,7 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device, ckpt
 
     model.to(device)
     model.eval()
-    return model
+    return model, predictor
 
 
 def model_param_count(model: nn.Module) -> int:
@@ -422,7 +437,7 @@ def model_family(config: dict) -> str:
         return 'Transformer'
     if name in ('convnext_upernet', 'hrnet_ocr'):
         return 'Hybrid SOTA'
-    if name in ('sam', 'sam_fpn', 'sam2', 'dinov2'):
+    if name in ('sam', 'sam_fpn', 'sam_v2_fine_tuned', 'dinov2'):
         return 'Foundation'
     return 'Other'
 
@@ -440,7 +455,7 @@ def _forward_sam_eval(
     """
     Standalone SAM forward pass for evaluation.
 
-    Mirrors _forward_sam() in train_unified_wandb_sam.py exactly so that
+    Mirrors _forward_sam() in train_unified_wandb_sam_v1.py exactly so that
     the inference path at eval time is identical to training.
 
     Why the per-image loop is required
@@ -491,28 +506,103 @@ def _forward_sam_eval(
     return torch.cat(upscaled_list, dim=0)   # [B, 1, H, W] logits
 
 @torch.no_grad()
-def _forward_sam_fpn_eval(
-    model  : nn.Module,
-    batch  : dict,
-    device : torch.device,
-) -> torch.Tensor:
-    return torch.cat(upscaled_list, dim=0)   # [B, 1, H, W] logits
-
-@torch.no_grad()
 def _forward_sam2_eval(
     model  : nn.Module,
     batch  : dict,
     device : torch.device,
-) -> torch.Tensor:
-    return torch.cat(upscaled_list, dim=0)   # [B, 1, H, W] logits
+    config : dict,
+    predictor  : SAM2ImagePredictor = None):
+    valid_items = []
+    for item in batch:
+        if item['image'] is None or item['mask'] is None:
+            continue
+        if item['labels_size'] == 0:
+            continue
+        pts = item['points']
+        if not isinstance(pts, np.ndarray) or pts.size == 0:
+            continue
+        valid_items.append(item)
+
+    if not valid_items:
+        return None, None
+
+    with torch.amp.autocast('cuda'):
+        predictor.set_image_batch([item['image'] for item in valid_items])
+
+    prd_logits_list = []
+    gt_masks_list = []
+
+    with torch.amp.autocast('cuda'):
+        for i, item in enumerate(valid_items):
+            input_point = item['points']  # (N, 2) numpy
+            num_masks = item['labels_size']
+            input_label = np.ones((num_masks, 1), dtype=np.int32)
+
+            # Prepare prompt tensors.
+            # img_idx=i tells _prep_prompts which image's (H, W) to use
+            # when normalising point coordinates to [0, 1].
+            mask_input, unnorm_coords, labels, _ = predictor._prep_prompts(
+                input_point, input_label,
+                box=None, mask_logits=None,
+                normalize_coords=True,
+                img_idx=i,
+            )
+
+            if unnorm_coords is None or unnorm_coords.shape[0] == 0:
+                continue
+
+            # Slice this sample's features out of the batch.
+            image_embed = predictor._features['image_embed'][i].unsqueeze(0)  # [1, C, H, W]
+            high_res_feats = [
+                feat_level[i].unsqueeze(0)  # [1, C, H, W]
+                for feat_level in predictor._features['high_res_feats']
+            ]
+
+            # Prompt encoder: points → sparse & dense embeddings.
+            sparse_emb, dense_emb = predictor.model.sam_prompt_encoder(
+                points=(unnorm_coords, labels),
+                boxes=None,
+                masks=None,
+            )
+
+            # Mask decoder: embeddings → low-res logit masks + IoU scores.
+            batched_mode = unnorm_coords.shape[0] > 1
+            low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
+                image_embeddings=image_embed,
+                image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_emb,
+                dense_prompt_embeddings=dense_emb,
+                multimask_output=True,
+                repeat_image=batched_mode,
+                high_res_features=high_res_feats,
+            )
+
+            # Upsample low-res logits back to original image resolution.
+            # Result is still LOGITS (no sigmoid).
+            prd_logits = predictor._transforms.postprocess_masks(
+                low_res_masks, predictor._orig_hw[i]
+            )
+
+            # Take the first mask channel (index 0 of multimask output).
+            prd_logits_list.append(prd_logits[:, 0])  # [1, H, W]  logits
+            gt_mask = torch.as_tensor(
+                item['mask'].astype(np.float32), device=device
+            )
+            gt_masks_list.append(gt_mask)
+
+    if not prd_logits_list:
+        return None, None
+
+    return torch.cat(prd_logits_list, dim=0), torch.stack(gt_masks_list)   # [B, 1, H, W] logits
 
 @torch.no_grad()
 def evaluate_model(
     model      : nn.Module,
     loader     : DataLoader,
     device     : torch.device,
-    model_name      : str,
-    threshold       : float = 0.5,
+    config     : dict,
+    threshold  : float = 0.5,
+    predictor  : SAM2ImagePredictor = None,
 ) -> tuple[dict, list[dict]]:
     """
     Run full test-set inference and return aggregated + per-image metrics.
@@ -526,63 +616,96 @@ def evaluate_model(
     acc       = MetricAccumulator(threshold=threshold)
     per_image = []
     timing    = []
-
+    model_name = config['model']['name']
     model.eval()
 
     for batch in tqdm(loader, desc='  Inference', leave=False, ncols=90):
         t0 = time.perf_counter()
-
         if model_name == 'sam':
             # SAM needs its own forward: batched encoder + per-image decoder.
             # Using model(batch['image']) would call the wrong class entirely.
             outputs = _forward_sam_eval(model, batch, device)
-        elif model_name == 'sam2':
-            outputs = _forward_sam2_eval(model, batch, device)
+            per_image, acc = _per_image_metrics(per_image, acc, timing, outputs, batch, device, t0, threshold)
+        elif model_name == 'sam_v2_fine_tuned':
+            outputs, masks = _forward_sam2_eval(model, batch, device, config, predictor)
+            per_image, acc = _per_image_metrics_sam2(per_image, acc, timing, outputs, masks, batch, device, t0, threshold)
         else:
             images  = batch['image'].to(device)
             outputs = model(images)
-
-        # Some models return a tuple (logits, aux); take the main output
-        if isinstance(outputs, tuple):
-            outputs = outputs[0]
-
-        # Ensure correct shape: [B, 1, H, W]
-        if outputs.dim() == 3:
-            outputs = outputs.unsqueeze(1)
-
-        probs = torch.sigmoid(outputs)
-
-        t1 = time.perf_counter()
-        masks = batch['mask'].to(device)
-        timing.append((t1 - t0) / masks.shape[0])  # per-image seconds
-
-        acc.update(probs.cpu(), masks.cpu())
-
-        # Per-image metrics
-        for i, img_path in enumerate(batch.get('image_path', [''] * masks.shape[0])):
-            p = probs[i].cpu()
-            m = masks[i].cpu()
-            eps = 1e-7
-            tp = (p > threshold).float() * m
-            fp = (p > threshold).float() * (1 - m)
-            fn = (1 - (p > threshold).float()) * m
-            tp_sum = tp.sum().item()
-            fp_sum = fp.sum().item()
-            fn_sum = fn.sum().item()
-            img_dice = 2 * tp_sum / (2 * tp_sum + fp_sum + fn_sum + eps)
-            img_iou  = tp_sum / (tp_sum + fp_sum + fn_sum + eps)
-            per_image.append({
-                'image'    : os.path.basename(img_path),
-                'dice'     : round(img_dice, 4),
-                'iou'      : round(img_iou,  4),
-                'pred_prob': round(p.mean().item(), 4),
-                'gt_ratio' : round(m.mean().item(), 4),
-            })
-
+            per_image, acc = _per_image_metrics(per_image, acc, timing, outputs, batch, device, t0, threshold)
     agg = acc.compute()
     agg['inference_ms'] = round(np.mean(timing) * 1000, 2)
     return agg, per_image
 
+def _per_image_metrics_sam2(per_image, acc, timing, outputs, masks, batch, device, t0, threshold):
+    # ── Metrics — apply sigmoid ONCE on logits ─────────────────
+    probs = torch.sigmoid(outputs)  # logits → [0,1]
+
+    t1 = time.perf_counter()
+    timing.append((t1 - t0) / masks.shape[0])  # per-image seconds
+
+    acc.update(probs.cpu(), masks.cpu())
+
+    for i in range(len(batch)):
+        p = probs[i].cpu()
+        m = masks[i].cpu()
+        batch_item = batch[i]
+        eps = 1e-7
+        tp = (p > threshold).float() * m
+        fp = (p > threshold).float() * (1 - m)
+        fn = (1 - (p > threshold).float()) * m
+        tp_sum = tp.sum().item()
+        fp_sum = fp.sum().item()
+        fn_sum = fn.sum().item()
+        img_dice = 2 * tp_sum / (2 * tp_sum + fp_sum + fn_sum + eps)
+        img_iou = tp_sum / (tp_sum + fp_sum + fn_sum + eps)
+        per_image.append({
+            'image': os.path.basename(batch_item['image_path']),
+            'dice': round(img_dice, 4),
+            'iou': round(img_iou, 4),
+            'pred_prob': round(p.mean().item(), 4),
+            'gt_ratio': round(m.mean().item(), 4),
+        })
+    return per_image, acc
+
+def _per_image_metrics(per_image, acc, timing, outputs, batch, device, t0, threshold):
+    # Some models return a tuple (logits, aux); take the main output
+    if isinstance(outputs, tuple):
+        outputs = outputs[0]
+
+    # Ensure correct shape: [B, 1, H, W]
+    if outputs.dim() == 3:
+        outputs = outputs.unsqueeze(1)
+
+    probs = torch.sigmoid(outputs)
+
+    t1 = time.perf_counter()
+    masks = batch['mask'].to(device)
+    timing.append((t1 - t0) / masks.shape[0])  # per-image seconds
+
+    acc.update(probs.cpu(), masks.cpu())
+
+    # Per-image metrics
+    for i, img_path in enumerate(batch.get('image_path', [''] * masks.shape[0])):
+        p = probs[i].cpu()
+        m = masks[i].cpu()
+        eps = 1e-7
+        tp = (p > threshold).float() * m
+        fp = (p > threshold).float() * (1 - m)
+        fn = (1 - (p > threshold).float()) * m
+        tp_sum = tp.sum().item()
+        fp_sum = fp.sum().item()
+        fn_sum = fn.sum().item()
+        img_dice = 2 * tp_sum / (2 * tp_sum + fp_sum + fn_sum + eps)
+        img_iou = tp_sum / (tp_sum + fp_sum + fn_sum + eps)
+        per_image.append({
+            'image': os.path.basename(img_path),
+            'dice': round(img_dice, 4),
+            'iou': round(img_iou, 4),
+            'pred_prob': round(p.mean().item(), 4),
+            'gt_ratio': round(m.mean().item(), 4),
+        })
+    return per_image, acc
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prediction visualisation
@@ -868,7 +991,7 @@ def main():
                     num_workers=args.num_workers,
                     pin_memory=(device.type == 'cuda'),
                 )
-            elif config['model']['name'] == 'sam2':
+            elif config['model']['name'] == 'sam_v2_fine_tuned':
                 data_root = config['data'].get('data_root', args.data_root)
                 test_loader = get_sam2_dataset(data_root, args.batch_size)
             else:
@@ -891,12 +1014,13 @@ def main():
             continue
 
         # ── Build model ───────────────────────────────────────────────────────
-        try:
-            model = build_model_from_config(config, ckpt, device, ckpt_path)
-        except Exception as e:
-            print(f'  [SKIP] Model construction failed: {e}')
-            failed_models.append(display_name)
-            continue
+        model, predictor = build_model_from_config(config, ckpt, device, ckpt_path)
+        # try:
+        #     model, predictor = build_model_from_config(config, ckpt, device, ckpt_path)
+        # except Exception as e:
+        #     print(f'  [SKIP] Model construction failed: {e}')
+        #     failed_models.append(display_name)
+        #     continue
 
         params = model_param_count(model)
         print(f'  Parameters: {params / 1e6:.2f} M')
@@ -907,8 +1031,9 @@ def main():
                 model           = model,
                 loader          = test_loader,
                 device          = device,
-                model_name      = config['model']['name'],
+                config          = config,
                 threshold       = args.threshold,
+                predictor       = predictor
             )
         except torch.cuda.OutOfMemoryError:
             print('  [WARN] CUDA OOM — retrying on CPU…')
@@ -919,27 +1044,27 @@ def main():
                 model           = model,
                 loader          = test_loader,
                 device          = device_cpu,
-                model_name      = config['model']['name'],
+                config          = config,
                 threshold       = args.threshold,
+                predictor       = predictor
             )
             model = model.to(device)
 
         # ── Save prediction overlays ──────────────────────────────────────────
-        if args.save_predictions:
-            pred_dir = output_dir / 'predictions' / display_name
-            print(f'  Saving {args.num_pred_samples} prediction overlays → {pred_dir}')
-            try:
-                save_prediction_overlays(
-                    model           = model,
-                    loader          = test_loader,
-                    device          = device,
-                    out_dir         = pred_dir,
-                    is_sam          = is_sam,
-                    n_samples       = args.num_pred_samples,
-                    threshold       = args.threshold,
-                )
-            except Exception as e:
-                print(f'  [WARN] Could not save overlays: {e}')
+        pred_dir = output_dir / 'predictions' / display_name
+        print(f'  Saving {args.num_pred_samples} prediction overlays → {pred_dir}')
+        try:
+            save_prediction_overlays(
+                model=model,
+                loader=test_loader,
+                device=device,
+                out_dir=pred_dir,
+                is_sam=is_sam,
+                n_samples=args.num_pred_samples,
+                threshold=args.threshold,
+            )
+        except Exception as e:
+            print(f'  [WARN] Could not save overlays: {e}')
 
         # ── Collect result record ─────────────────────────────────────────────
         result = {
