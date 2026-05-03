@@ -28,15 +28,9 @@ from tqdm import tqdm
 import wandb
 import torch.nn.functional as F
 from transformers import SamModel
-# from models import get_model
 from src.utils.losses import get_loss_function
-# from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
 from transformers import SamProcessor
-from segment_anything import sam_model_registry
-# from segment_anything.utils.transforms import ResizeLongestSide
-# import cv2
-# from PIL import Image
 from src.foundation_models.sam.dataset import SAMDataset, create_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -649,6 +643,17 @@ class UnifiedTrainer:
         if self.use_wandb:
             wandb.finish()
 
+def get_sam_fpn_dataset(data_root, variant):
+    model_tags = {
+        'vit_b': 'facebook/sam-vit-base',
+        'vit_l': 'facebook/sam-vit-large',
+        'vit_h': 'facebook/sam-vit-huge'
+    }
+    model_tag = model_tags.get(variant)
+    processor = SamProcessor.from_pretrained(model_tag)
+    data = create_dataset(data_root, 'test')
+    dataset = SAMDataset(dataset=data, processor=processor)
+    return dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -743,7 +748,7 @@ def train_single_model(config: dict):
 def train_all_models(base_config: dict):
     """Train all SAM variants sequentially."""
     all_models = {
-        'sam_fpn': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran

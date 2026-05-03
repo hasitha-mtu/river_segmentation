@@ -183,9 +183,6 @@ class UnifiedTrainer:
         self.es_counter   = 0
         self.es_best_dice = 0.0
 
-        if config['training'].get('resume', False):
-            self.load_checkpoint()
-
         self.print_configuration()
 
         if self.use_wandb and config['logging'].get('watch_model', False):
@@ -588,7 +585,7 @@ class UnifiedTrainer:
     def save_checkpoint(self, epoch, val_dice, val_iou, is_best):
         checkpoint = {
             'epoch'               : epoch,
-            'model_state_dict'    : self.model.state_dict(),
+            'model_state_dict'    : self.predictor.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'best_val_dice'       : self.best_val_dice,
@@ -604,22 +601,6 @@ class UnifiedTrainer:
             print(f'  ✓ New best — Dice: {val_dice:.4f}  IoU: {val_iou:.4f}')
             if self.use_wandb and self.config['logging'].get('save_model_wandb', False):
                 wandb.save(best_path)
-
-    def load_checkpoint(self):
-        path = os.path.join(self.checkpoint_dir, 'latest.pth')
-        if os.path.exists(path):
-            print(f'Loading checkpoint: {path}')
-            ckpt = torch.load(path, map_location=self.device)
-            self.model.load_state_dict(ckpt['model_state_dict'])
-            self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-            if self.scheduler and ckpt.get('scheduler_state_dict'):
-                self.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-            self.start_epoch   = ckpt['epoch'] + 1
-            self.best_val_dice = ckpt['best_val_dice']
-            self.best_val_iou  = ckpt['best_val_iou']
-            print(f'  Resumed from epoch {self.start_epoch}')
-        else:
-            print(f'No checkpoint found at {path}')
 
     # ── Main training loop ────────────────────────────────────────────────────
 
@@ -757,7 +738,7 @@ def get_default_config():
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 100,
+            'epochs'    : 1,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -820,15 +801,11 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     """Train all SAM2 variants sequentially."""
-    # all_models = {
-    #     'sam2': ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
-    # }
-
     all_models = {
-        'sam2': ['sam2.1_hiera_tiny'],
+        'sam_v2_fine_tuned': ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     }
 
-    FOUNDATION_MODELS = {'sam', 'sam_fpn', 'sam_finetuned', 'sam2'}
+    FOUNDATION_MODELS = {'sam', 'sam_fpn', 'sam_v1_fine_tuned', 'sam_v2_fine_tuned'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):
