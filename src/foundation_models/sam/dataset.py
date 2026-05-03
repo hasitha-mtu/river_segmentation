@@ -63,7 +63,8 @@ def create_sam2_dataset(data_dir, split, batch_size):
             'image': image,
             'mask': mask,
             'points': points,
-            'labels_size': labels_size
+            'labels_size': labels_size,
+            'image_path': image_path
         })
 
     batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
