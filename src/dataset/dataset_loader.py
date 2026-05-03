@@ -6,6 +6,7 @@ from pathlib import Path
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 import random
+import os
 
 
 def mask_to_tensor(mask, image_size=None):
@@ -262,39 +263,88 @@ def get_dataloaders(data_dir, batch_size=8, num_workers=4, augment_train=True, d
     
     else:
         return None
+    
+def apply_random_augmentations(image, output_path):
+    image.save(output_path + "original.jpg", "JPEG")
+    # Random horizontal flip
+    if random.random() > 0.5:
+        horizontal_flip_image = TF.hflip(image)
+        horizontal_flip_image.save(output_path + "horizontal_flip_image.jpg", "JPEG")
+        
+    # Random vertical flip
+    if random.random() > 0.5:
+        vertical_flip_image = TF.vflip(image)
+        vertical_flip_image.save(output_path + "vertical_flip_image.jpg", "JPEG")
+        
+    # Random rotation (90, 180, 270 degrees)
+    if random.random() > 0.5:
+        angle = random.choice([90, 180, 270])
+        rotation_image = TF.rotate(image, angle)
+        rotation_image.save(output_path + "rotation_image.jpg", "JPEG")
+        
+    # Random brightness and contrast (only for image)
+    if random.random() > 0.5:
+        brightness_factor = random.uniform(0.8, 1.2)
+        brightness_image = TF.adjust_brightness(image, brightness_factor)
+        brightness_image.save(output_path + "brightness_image.jpg", "JPEG")
+        
+    if random.random() > 0.5:
+        # contrast_factor = random.uniform(0.8, 1.2)
+        contrast_factor = random.uniform(0.4, 2.4)
+        contrast_image = TF.adjust_contrast(image, contrast_factor)
+        contrast_image.save(output_path + "contrast_image.jpg", "JPEG")
 
+# if __name__ == "__main__":
+#     image_path = "dataset/processed_512_resized/train/images/DJI_20250324094612_0052_V.jpg"
+#     output_path = "dataset/augmented/aug3/"
+#     if not os.path.exists(output_path):
+#         os.makedirs(output_path)
+#     image = Image.open(image_path).convert('RGB')
+#     apply_random_augmentations(image, output_path)
+
+if __name__ == "__main__":
+    train_loader, _ = get_training_dataloaders(
+        data_dir='./dataset/processed_512_resized',
+        batch_size=4, num_workers=0,
+        augment_train=False, image_size=512
+    )
+    batch = next(iter(train_loader))
+    imgs = batch['image']
+    print(f"Pixel mean: {imgs.mean(dim=[0,2,3])}")  # should be ~[0.485, 0.456, 0.406]
+    print(f"Pixel std : {imgs.std(dim=[0,2,3])}")   # should be ~[0.229, 0.224, 0.225]
+    print(f"Pixel range: {imgs.min():.3f} to {imgs.max():.3f}")
 
 # Example usage
-if __name__ == "__main__":
-    # Example 1: Default 1024x1024 images
-    print("="*80)
-    print("Testing with 1024x1024 images")
-    print("="*80)
-    train_loader_1024, val_loader_1024 = get_training_dataloaders(
-        data_dir="dataset/processed_1024",
-        batch_size=4,
-        num_workers=4,
-        augment_train=True,
-        image_size=1024
-    )
+# if __name__ == "__main__":
+#     # Example 1: Default 1024x1024 images
+#     print("="*80)
+#     print("Testing with 1024x1024 images")
+#     print("="*80)
+#     train_loader_1024, val_loader_1024 = get_training_dataloaders(
+#         data_dir="dataset/processed_512_resized",
+#         batch_size=4,
+#         num_workers=4,
+#         augment_train=True,
+#         image_size=1024
+#     )
     
-    # Test loading a batch
-    print("\nTesting data loading...")
-    for batch in train_loader_1024:
-        images = batch['image']
-        masks = batch['mask']
-        print(f"Image batch shape: {images.shape}")
-        print(f"Mask batch shape: {masks.shape}")
-        print(f"Image range: [{images.min():.3f}, {images.max():.3f}]")
-        print(f"Mask unique values: {torch.unique(masks)}")
-        break
+#     # Test loading a batch
+#     print("\nTesting data loading...")
+#     for batch in train_loader_1024:
+#         images = batch['image']
+#         masks = batch['mask']
+#         print(f"Image batch shape: {images.shape}")
+#         print(f"Mask batch shape: {masks.shape}")
+#         print(f"Image range: [{images.min():.3f}, {images.max():.3f}]")
+#         print(f"Mask unique values: {torch.unique(masks)}")
+#         break
     
-    # Example 2: Resized 512x512 images
-    print("\n" + "="*80)
-    print("Testing with 512x512 images")
-    print("="*80)
+#     # Example 2: Resized 512x512 images
+#     print("\n" + "="*80)
+#     print("Testing with 512x512 images")
+#     print("="*80)
     train_loader_512, val_loader_512 = get_training_dataloaders(
-        data_dir="dataset/processed_1024",
+        data_dir="dataset/processed_512_resized",
         batch_size=8,
         num_workers=4,
         augment_train=True,
@@ -304,6 +354,8 @@ if __name__ == "__main__":
     # Test loading a batch
     print("\nTesting data loading...")
     for batch in train_loader_512:
+        print(f'batch type: {type(batch)}')
+        print(f'batch keys: {batch.keys()}')
         images = batch['image']
         masks = batch['mask']
         print(f"Image batch shape: {images.shape}")
