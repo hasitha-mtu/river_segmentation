@@ -27,11 +27,11 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import wandb
 import torch.nn.functional as F
-from transformers import SamModel
+from transformers import SamModel, SamProcessor
 from src.utils.losses import get_loss_function
 from src.utils.metrics import SegmentationMetrics
-from transformers import SamProcessor
 from src.foundation_models.sam.dataset import SAMDataset, create_dataset
+from src.foundation_models.sam.dataset import get_bounding_box
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SAM Dataset
@@ -509,10 +509,6 @@ class UnifiedTrainer:
             if self.use_wandb and self.config['logging'].get('save_model_wandb', False):
                 wandb.save(best_path)
 
-        save_interval = self.config['system'].get('save_interval', 10)
-        if epoch % save_interval == 0:
-            torch.save(checkpoint, os.path.join(self.checkpoint_dir, f'epoch_{epoch}.pth'))
-
     def load_checkpoint(self):
         path = os.path.join(self.checkpoint_dir, 'latest.pth')
         if os.path.exists(path):
@@ -643,7 +639,7 @@ class UnifiedTrainer:
         if self.use_wandb:
             wandb.finish()
 
-def get_sam_fpn_dataset(data_root, variant):
+def get_sam1_dataset(data_root, variant):
     model_tags = {
         'vit_b': 'facebook/sam-vit-base',
         'vit_l': 'facebook/sam-vit-large',
@@ -747,13 +743,17 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     """Train all SAM variants sequentially."""
+    # all_models = {
+    #     'sam_v1_fine_tuned': ['vit_b', 'vit_l', 'vit_h'],
+    # }
+
     all_models = {
-        'sam_finetuned': ['vit_b', 'vit_l', 'vit_h'],
+        'sam_v1_fine_tuned': ['vit_b'],
     }
 
     # Foundation models use early stopping — all other benchmark models ran
     # fixed 100 epochs.  This asymmetry is documented in the paper.
-    FOUNDATION_MODELS = {'sam', 'sam_fpn', 'sam_finetuned'}
+    FOUNDATION_MODELS = {'sam', 'sam_fpn', 'sam_v1_fine_tuned'}
 
     for model_name, variants in all_models.items():
         for variant in (variants or [None]):

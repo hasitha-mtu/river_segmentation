@@ -24,7 +24,8 @@ def create_dataset(data_dir, split):
     image_paths = sorted(list(images_dir.glob("*.jpg")))
     dataset_dict = {
         "image": [np.array(Image.open(image_path).convert('RGB')) for image_path in image_paths],
-        "label": [np.array(Image.open(masks_dir / f"{image_path.stem}.png").convert('L')) for image_path in image_paths]
+        "label": [np.array(Image.open(masks_dir / f"{image_path.stem}.png").convert('L')) for image_path in image_paths],
+        "image_path" : [os.path.basename(image_path) for image_path in image_paths]
         }
     dataset = InitialDataset.from_dict(dataset_dict)
     print(dataset.shape)
@@ -179,6 +180,9 @@ class SAMDataset(Dataset):
 
         # Add ground truth segmentation as a torch tensor
         inputs["ground_truth_mask"] = torch.from_numpy(ground_truth_mask).float()
+        # inputs["image"] = image
+        # inputs["mask"] = ground_truth_mask
+        inputs["image_path"] = item["image_path"]
 
         return inputs
 
