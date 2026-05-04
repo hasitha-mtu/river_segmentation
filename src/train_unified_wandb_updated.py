@@ -37,7 +37,7 @@ from models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
-from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_fpn
+from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_v1_fine_tuned
 from src.train_unified_wandb_sam_v2_1 import train_single_model as train_single_model_sam_v2_fine_tuned
 
 # SAM-specific imports — only required when training SAM variants.
@@ -50,158 +50,6 @@ try:
 except ImportError:
     SAM_AVAILABLE = False
     print('[WARN] segment_anything not found — SAM training will not be available.')
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Dual Dataset
-# ─────────────────────────────────────────────────────────────────────────────
-
-class GlobalLocalDataset(Dataset):
-    """
-    Pairs every local patch with its corresponding resized global image.
-
-    Directory layout expected:
-        <local_root>/
-            train/images/  DJI_xxx_patch_0000.jpg  ...
-            train/masks/   DJI_xxx_patch_0000.png  ...
-        <global_root>/
-            train/images/  DJI_xxx.jpg  ...
-            train/masks/   DJI_xxx.png  ...    (not used — local mask is the target)
-
-    Pairing rule:
-        Strip '_patch_NNNN' from the local filename stem to recover the source stem,
-        then look up the matching file in the global directory.
-        e.g. 'DJI_20230615120000_0042_V_patch_0007' → 'DJI_20230615120000_0042_V'
-
-    Args:
-        local_root  : Root of the sliced-patch dataset (e.g. 'dataset/processed_512_patch')
-        global_root : Root of the resized dataset      (e.g. 'dataset/processed_512_resized')
-        split       : One of 'train', 'val', 'test'
-        image_size  : Resize both inputs to this square size (default 512)
-        augment     : Apply random flips/rotations (training only)
-    """
-
-    # ImageNet normalisation shared by both branches
-    MEAN = [0.485, 0.456, 0.406]
-    STD  = [0.229, 0.224, 0.225]
-
-    def __init__(
-        self,
-        local_root: str,
-        global_root: str,
-        split: str = 'train',
-        image_size: int = 512,
-        augment: bool = False,
-    ):
-        self.local_img_dir  = Path(local_root)  / split / 'images'
-        self.local_mask_dir = Path(local_root)  / split / 'masks'
-        self.global_img_dir = Path(global_root) / split / 'images'
-        self.image_size = image_size
-        self.augment    = augment
-
-        # Build index: [(local_img_path, local_mask_path, global_img_path), ...]
-        self.samples: list[tuple[Path, Path, Path]] = []
-        skipped = 0
-
-        for local_img in sorted(self.local_img_dir.glob('*.jpg')):
-            local_mask = self.local_mask_dir / f'{local_img.stem}.png'
-            if not local_mask.exists():
-                skipped += 1
-                continue
-
-            # Recover source stem by stripping '_patch_NNNN'
-            source_stem = re.sub(r'_patch_\d+$', '', local_img.stem)
-            global_img  = self.global_img_dir / f'{source_stem}.jpg'
-
-            if not global_img.exists():
-                skipped += 1
-                continue
-
-            self.samples.append((local_img, local_mask, global_img))
-
-        if skipped:
-            print(f'  [GlobalLocalDataset/{split}] Skipped {skipped} unmatched samples.')
-        print(f'  [GlobalLocalDataset/{split}] {len(self.samples)} paired samples loaded.')
-
-        # Transforms
-        self.img_tf  = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=self.MEAN, std=self.STD),
-        ])
-        # Mask transform: always produces [1, H, W] float tensor in [0, 1]
-        # - Resize with NEAREST to preserve hard label boundaries
-        # - ToTensor on an 'L'-mode PIL image gives shape [1, H, W], values [0.0, 1.0]
-        # - Lambda clamp handles edge cases where mask pixels are 0/255 or not perfectly binary
-        self.mask_tf = transforms.Compose([
-            transforms.Resize((image_size, image_size), interpolation=Image.NEAREST),
-            transforms.ToTensor(),                          # [1, H, W], values in [0, 1]
-            transforms.Lambda(lambda m: (m > 0.5).float()) # binarise: 0.0 or 1.0 only
-        ])
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx: int):
-        local_img_path, local_mask_path, global_img_path = self.samples[idx]
-
-        local_img  = Image.open(local_img_path).convert('RGB')
-        global_img = Image.open(global_img_path).convert('RGB')
-        mask       = Image.open(local_mask_path).convert('L')  # 'L' = grayscale → [1,H,W] after ToTensor
-
-        # Consistent augmentation: apply the SAME geometric transform to all three
-        if self.augment:
-            local_img, global_img, mask = self._augment(local_img, global_img, mask)
-
-        mask_tensor = self.mask_tf(mask)
-
-        # Defensive shape check — catches regressions before they reach the loss
-        assert mask_tensor.shape[0] == 1, (
-            f"Mask must be single-channel [1,H,W], got {mask_tensor.shape}. "
-            f"Source: {local_mask_path}"
-        )
-        assert mask_tensor.shape[1:] == torch.Size([self.image_size, self.image_size]), (
-            f"Mask spatial size mismatch: expected [{self.image_size},{self.image_size}], "
-            f"got {list(mask_tensor.shape[1:])}"
-        )
-
-        return {
-            'local_image':  self.img_tf(local_img),
-            'global_image': self.img_tf(global_img),
-            'mask':         mask_tensor,
-            # Keep paths for debugging
-            'local_path':   str(local_img_path),
-            'global_path':  str(global_img_path),
-        }
-
-    # ── augmentation ──────────────────────────────────────────────────────────
-
-    def _augment(self, local_img, global_img, mask):
-        """Apply identical random flips / 90° rotations to all three inputs."""
-        import random
-
-        # Random horizontal flip
-        if random.random() > 0.5:
-            local_img  = local_img.transpose(Image.FLIP_LEFT_RIGHT)
-            global_img = global_img.transpose(Image.FLIP_LEFT_RIGHT)
-            mask       = mask.transpose(Image.FLIP_LEFT_RIGHT)
-
-        # Random vertical flip
-        if random.random() > 0.5:
-            local_img  = local_img.transpose(Image.FLIP_TOP_BOTTOM)
-            global_img = global_img.transpose(Image.FLIP_TOP_BOTTOM)
-            mask       = mask.transpose(Image.FLIP_TOP_BOTTOM)
-
-        # Random 90° rotation
-        k = random.randint(0, 3)
-        if k > 0:
-            angle = k * 90
-            local_img  = local_img.rotate(angle)
-            global_img = global_img.rotate(angle)
-            mask       = mask.rotate(angle)
-
-        return local_img, global_img, mask
-
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SAM Dataset
@@ -1272,26 +1120,28 @@ def train_all_models(base_config: dict):
     #     'sam'               : ['vit_b', 'vit_l', 'vit_h'],
     #     'sam_fpn'           : ['vit_b', 'vit_l', 'vit_h'],
     #     'dinov2'            : ['vit_s', 'vit_b', 'vit_l',],
+    #     'sam_v1_fine_tuned' : ['vit_b', 'vit_l', 'vit_h'],
     #     'sam_v2_fine_tuned' : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     # }
 
     all_models = {
-        # # CNN baselines
-        # 'unet': [],
-        # 'unetpp': [],
-        # 'resunetpp': [],
-        # 'deeplabv3plus': [],
-        # 'deeplabv3plus_cbam': [],
-        # # Transformers
-        # 'segformer': ['b0'],
-        # 'swin_unet': ['tiny'],
-        # # Hybrid SOTA
-        # 'convnext_upernet': ['tiny'],
-        # 'hrnet_ocr': ['w18'],
-        # # # Foundation models
-        # 'sam': ['vit_b'],
-        # 'sam_fpn': ['vit_b'],
-        # 'dinov2': ['vit_s'],
+        # CNN baselines
+        'unet': [],
+        'unetpp': [],
+        'resunetpp': [],
+        'deeplabv3plus': [],
+        'deeplabv3plus_cbam': [],
+        # Transformers
+        'segformer': ['b0'],
+        'swin_unet': ['tiny'],
+        # Hybrid SOTA
+        'convnext_upernet': ['tiny'],
+        'hrnet_ocr': ['w18'],
+        # # Foundation models
+        'sam': ['vit_b'],
+        'sam_fpn': ['vit_b'],
+        'dinov2': ['vit_s'],
+        'sam_v1_fine_tuned': ['vit_b'],
         'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     }
 
@@ -1300,7 +1150,7 @@ def train_all_models(base_config: dict):
     # 274-image training set given their large parameter counts (91M–632M).
     # All other benchmark models trained with fixed 100 epochs — this
     # asymmetry is documented in the paper's training details table.
-    FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam_v2_fine_tuned'}
+    FOUNDATION_MODELS = {'sam', 'dinov2', 'sam_fpn', 'sam_v1_fine_tuned', 'sam_v2_fine_tuned'}
 
     for model_name, variants in all_models.items():
         print(f'train_all_models|model_name: {model_name}, variants:{variants}')
@@ -1323,6 +1173,8 @@ def train_all_models(base_config: dict):
                 }
             if model_name == 'sam_v2_fine_tuned':
                 train_single_model_sam_v2_fine_tuned(config)
+            if model_name == 'sam_v1_fine_tuned':
+                train_single_model_sam_v1_fine_tuned(config)
             else:
                 print(f'train_single_model|model_name: {model_name}')
                 train_single_model(config)
@@ -1345,8 +1197,8 @@ def main():
         print(f'epochs: {default_config['training']['epochs']}')
         print(f'output_dir: {default_config['system']['output_dir']}')
 
-        # default_config['training']['epochs'] = 1
-        # default_config['logging']['use_wandb'] = False
+        default_config['training']['epochs'] = 1
+        default_config['logging']['use_wandb'] = False
 
         data_root = default_config['data']['data_root']
         data_root = f'{data_root}/{dataset_variation}'
