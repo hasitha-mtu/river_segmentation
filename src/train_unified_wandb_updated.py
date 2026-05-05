@@ -475,7 +475,10 @@ class UnifiedTrainer:
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
 
-        exp_name = f'{model_name}_{variant}' if variant else f'{model_name}'
+        if variant:
+            exp_name = f'{model_name}'
+        else:
+            exp_name = f'{model_name}_{variant}'
 
         output_dir           = self.config['system']['output_dir']
         self.model_dir       = os.path.join(output_dir, model_name)
