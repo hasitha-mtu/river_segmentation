@@ -475,7 +475,7 @@ class UnifiedTrainer:
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
 
-        if variant:
+        if variant is None:
             exp_name = f'{model_name}'
         else:
             exp_name = f'{model_name}_{variant}'
