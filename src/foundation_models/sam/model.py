@@ -535,12 +535,28 @@ class SAMEncoderDecoderFPN(nn.Module):
             
         return output
     
+# def build_sam_fpn_segmentation(variant, in_channels, num_classes):
+#     print(f'Current working dir: {os.getcwd()}')
+#     paths = {
+#         'vit_b': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
+#         'vit_l': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
+#         'vit_h': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth'
+#     }
+#
+#     checkpoint_path = paths.get(variant)
+#     return SAMEncoderDecoderFPN(
+#             sam_checkpoint=checkpoint_path,
+#             model_type=variant,
+#             freeze_encoder=True,
+#             out_channels=num_classes
+#         )
+
 def build_sam_fpn_segmentation(variant, in_channels, num_classes):
     print(f'Current working dir: {os.getcwd()}')
     paths = {
-        'vit_b': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
-        'vit_l': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
-        'vit_h': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth'
+        'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
+        'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
+        'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth'
     }
 
     checkpoint_path = paths.get(variant)
@@ -550,10 +566,6 @@ def build_sam_fpn_segmentation(variant, in_channels, num_classes):
             freeze_encoder=True,
             out_channels=num_classes
         )
-    # return SAMFineTuned(
-    #         sam_checkpoint=checkpoint_path,
-    #         model_type=variant
-    #     )
 
 # def build_sam_finetuned_segmentation(variant, in_channels, num_classes):
 #     paths = {
