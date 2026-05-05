@@ -989,6 +989,73 @@ class UnifiedTrainer:
 # Configuration helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# def get_default_config():
+#     return {
+#         'model': {
+#             'name'      : 'unet',
+#             'variant'   : None,
+#             'n_channels': 3,
+#             'n_classes' : 1,
+#         },
+#         'data': {
+#             'data_root'    : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/dataset/processed_512_resized',
+#             'image_size'   : 512,
+#             'augment_train': True
+#         },
+#         'training': {
+#             'batch_size': 4,
+#             'epochs'    : 1,
+#             'clip_grad' : 1.0,
+#             'resume'    : False,
+#             'optimizer' : {
+#                 'type'         : 'adam',
+#                 'learning_rate': 1e-4,
+#                 'weight_decay' : 0.01,
+#                 'momentum'     : 0.9,
+#             },
+#             'scheduler' : {
+#                 'type'        : 'cosine',
+#                 'min_lr'      : 1e-6,
+#                 'step_size'   : 30,
+#                 'gamma'       : 0.1,
+#                 'warmup_epochs': 5,
+#             },
+#         },
+#         'loss': {
+#             'type'           : 'combined',
+#             'bce_weight'     : 1.0,
+#             'dice_weight'    : 1.0,
+#             'boundary_weight': 1.0,
+#             'use_boundary'   : True,
+#             'aux_weight'     : 0.4,  # GlobalLocal: weight for auxiliary branch losses
+#         },
+#         'logging': {
+#             'use_wandb'       : False,
+#             'wandb_project'   : 'river-segmentation',
+#             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
+#             'watch_model'     : False,
+#             'log_images'      : True,
+#             'save_model_wandb': True,
+#         },
+#         'system': {
+#             'seed'         : 42,
+#             'num_workers'  : 0,
+#             'output_dir'   : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/experiments',
+#             'log_interval' : 10,
+#             'save_interval': 10,
+#         },
+#         # ── Foundation model settings ──────────────────────────────────────────
+#         'foundation': {
+#             'pretrained'    : True,   # always True for benchmark validity
+#             'freeze_encoder': False,  # full fine-tuning (set True for linear probe)
+#             'sam_checkpoints': {
+#                 'vit_b': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
+#                 'vit_l': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
+#                 'vit_h': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth',
+#             }
+#         },
+#     }
+
 def get_default_config():
     return {
         'model': {
@@ -998,7 +1065,7 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/dataset/processed_512_resized',
+            'data_root'    : './dataset/processed_512_resized',
             'image_size'   : 512,
             'augment_train': True
         },
@@ -1040,30 +1107,21 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            'output_dir'   : r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/experiments',
+            'output_dir'   : './experiments',
             'log_interval' : 10,
             'save_interval': 10,
         },
         # ── Foundation model settings ──────────────────────────────────────────
-        # Only read when config['model']['name'] is 'sam' or 'dinov2'.
-        # get_model() must forward these to build_sam_segmentation /
-        # build_dinov2_segmentation via the config dict.
         'foundation': {
             'pretrained'    : True,   # always True for benchmark validity
             'freeze_encoder': False,  # full fine-tuning (set True for linear probe)
-            # SAM checkpoint paths — download from Meta before training:
-            #   vit_b: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
-            #   vit_l: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
-            #   vit_h: https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
             'sam_checkpoints': {
-                'vit_b': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_b_01ec64.pth',
-                'vit_l': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_l_0b3195.pth',
-                'vit_h': r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam/sam_vit_h_4b8939.pth',
-            },
-            # DINOv2 is auto-downloaded via torch.hub — no checkpoint paths needed.
+                'vit_b': './checkpoints/sam/sam_vit_b_01ec64.pth',
+                'vit_l': './checkpoints/sam/sam_vit_l_0b3195.pth',
+                'vit_h': './checkpoints/sam/sam_vit_h_4b8939.pth',
+            }
         },
     }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Training entry points
