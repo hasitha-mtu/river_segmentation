@@ -9,6 +9,7 @@ from src.hybrid_sota.convnext_upernet.model import build_convnext_upernet
 from src.hybrid_sota.hrnet_ocr.model import build_hrnet_ocr
 from src.transformers.models import get_model as get_transformer_model
 from src.cnn_baselines.models import get_model as get_cnn_model
+from src.foundation_models.dinov2.mask2former_head import build_dinov2_mask2former_segmentation
 
 def get_model(model_name, variant, n_channels=3, n_classes=1):
     """
@@ -53,6 +54,15 @@ def get_model(model_name, variant, n_channels=3, n_classes=1):
         return get_transformer_model(
             model_name,
             variant=variant, 
+            num_classes=n_classes)
+    elif model_name == 'dinov2_Mask2Former':
+        return build_dinov2_mask2former_segmentation(
+            variant=variant,
+            num_classes=n_classes)
+    elif model_name == 'dinov2_DPT':
+        return get_transformer_model(
+            model_name,
+            variant=variant,
             num_classes=n_classes)
     elif model_name in ('unet', 'unetpp', 'resunetpp', 'deeplabv3plus', 'deeplabv3plus_cbam'):
         return get_cnn_model(
