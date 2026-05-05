@@ -1,3 +1,4 @@
+# # Training module for sam_v2_fine_tuned only
 
 import os
 import json

@@ -1,23 +1,4 @@
-"""
-train_unified_wandb.py
-======================
-Unified Training Script with Weights & Biases Integration.
-
-Supports:
-  - Standard models  : CNN baselines, Transformers, Hybrid SOTA, Foundation Models
-  - GlobalLocal mode : dual-branch model trained on paired resized + sliced datasets
-
-GlobalLocal mode overview
--------------------------
-Each training sample consists of:
-  • global_image  — the full drone frame resized to 512×512 (scene context)
-  • local_patch   — a 512×512 tile sliced from the original full-res image (fine detail)
-  • mask          — the ground-truth mask for the local patch tile
-
-The GlobalLocalWrapper's fusion head learns to gate between the two views:
-  high alpha → trust global context  (useful under dense tree canopy occlusion)
-  low  alpha → trust local detail    (clear riverbank edges and thin structures)
-"""
+# # Training module for all the other segmentation models
 
 import os
 import re
@@ -39,6 +20,7 @@ from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
 from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_v1_fine_tuned
 from src.train_unified_wandb_sam_v2_1 import train_single_model as train_single_model_sam_v2_fine_tuned
+from src.train_unified_wandb_dinov2 import train_single_model as train_single_model_dinov2_Mask2Former
 
 # SAM-specific imports — only required when training SAM variants.
 # If segment_anything is not installed and SAM is not being trained, these
@@ -1105,23 +1087,24 @@ def train_all_models(base_config: dict):
 
     # all_models = {
     #     # CNN baselines
-    #     'unet'              : [],
-    #     'unetpp'            : [],
-    #     'resunetpp'         : [],
-    #     'deeplabv3plus'     : [],
-    #     'deeplabv3plus_cbam': [],
+    #     'unet'                : [],
+    #     'unetpp'              : [],
+    #     'resunetpp'           : [],
+    #     'deeplabv3plus'       : [],
+    #     'deeplabv3plus_cbam'  : [],
     #     # Transformers
-    #     'segformer'         : ['b0', 'b2'],
-    #     'swin_unet'         : ['tiny'],
+    #     'segformer'           : ['b0', 'b2'],
+    #     'swin_unet'           : ['tiny'],
     #     # Hybrid SOTA
-    #     'convnext_upernet'  : ['tiny', 'small', 'base'],
-    #     'hrnet_ocr'         : ['w18', 'w32', 'w48'],
+    #     'convnext_upernet'    : ['tiny', 'small', 'base'],
+    #     'hrnet_ocr'           : ['w18', 'w32', 'w48'],
     #     # # Foundation models
-    #     'sam'               : ['vit_b', 'vit_l', 'vit_h'],
-    #     'sam_fpn'           : ['vit_b', 'vit_l', 'vit_h'],
-    #     'dinov2'            : ['vit_s', 'vit_b', 'vit_l',],
-    #     'sam_v1_fine_tuned' : ['vit_b', 'vit_l', 'vit_h'],
-    #     'sam_v2_fine_tuned' : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
+    #     'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
+    #     'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
+    #     'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
+    #     'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
+    #     'sam_v1_fine_tuned'   : ['vit_b', 'vit_l', 'vit_h'],
+    #     'sam_v2_fine_tuned'   : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     # }
 
     all_models = {
@@ -1141,6 +1124,7 @@ def train_all_models(base_config: dict):
         'sam': ['vit_b'],
         'sam_fpn': ['vit_b'],
         'dinov2': ['vit_s'],
+        'dinov2_Mask2Former': ['vit_s'],
         'sam_v1_fine_tuned': ['vit_b'],
         'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     }
@@ -1175,6 +1159,8 @@ def train_all_models(base_config: dict):
                 train_single_model_sam_v2_fine_tuned(config)
             if model_name == 'sam_v1_fine_tuned':
                 train_single_model_sam_v1_fine_tuned(config)
+            if model_name == 'dinov2_Mask2Former':
+                train_single_model_dinov2_Mask2Former(config)
             else:
                 print(f'train_single_model|model_name: {model_name}')
                 train_single_model(config)

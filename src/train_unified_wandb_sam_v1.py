@@ -1,19 +1,4 @@
-"""
-train_unified_wandb.py
-======================
-Unified Training Script with Weights & Biases Integration.
-
-Supports:
-  - Standard models   : CNN baselines (UNet, UNet++, ResUNet++, DeepLabV3+),
-                        Hybrid SOTA (ConvNeXt-UPerNet, HRNet-OCR),
-                        Transformers (SegFormer, Swin-UNet)
-  - Foundation models : DINOv2 (via get_model), SAM vit_b/vit_l/vit_h
-
-All models use the same single dataset (processed_512_resized), the same
-combined loss (BCE + Dice, boundary optional), Adam optimiser, and cosine
-scheduler.  Foundation models additionally use early stopping (patience=20)
-to prevent overfitting on the 274-image training set.
-"""
+# Training module for sam_v1_fine_tuned only
 
 import os
 import json
