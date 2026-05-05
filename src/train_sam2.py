@@ -295,10 +295,14 @@ if __name__ == '__main__':
         test_data.append({"image":test_data_dir+"images/"+name,"annotation":test_data_dir+"masks/"+name[:-4]+".png"})
 
     # Load the fine-tuned model
-    FINE_TUNED_MODEL_WEIGHTS = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/fine_tuned_sam2_1000.torch'
 
-    sam2_checkpoint = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_small.pt'
-    model_cfg = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_s.yaml' 
+    # FINE_TUNED_MODEL_WEIGHTS = r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\fine_tuned_sam2_3000.torch'
+    # sam2_checkpoint = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_small.pt'
+    # model_cfg = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_s.yaml'
+
+    FINE_TUNED_MODEL_WEIGHTS = r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\experiments\sam2\sam2_sam2.1_hiera_tiny\checkpoints\best.pth'
+    sam2_checkpoint = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_tiny.pt'
+    model_cfg = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2/sam2.1_hiera_t.yaml'
 
     # Build net and load weights
     sam2_model = build_sam2(model_cfg, sam2_checkpoint, device="cuda") # load model
