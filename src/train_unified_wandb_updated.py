@@ -1100,7 +1100,7 @@ def get_default_config():
             'aux_weight'     : 0.4,  # GlobalLocal: weight for auxiliary branch losses
         },
         'logging': {
-            'use_wandb'       : False,
+            'use_wandb'       : True,
             'wandb_project'   : 'river-segmentation',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
