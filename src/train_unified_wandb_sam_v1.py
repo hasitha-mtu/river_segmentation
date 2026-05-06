@@ -416,6 +416,7 @@ class UnifiedTrainer:
 
         with torch.no_grad():
             for batch in tqdm(self.val_loader, desc='Validation'):
+                print(f'batch keys : {batch.keys()}')
                 main_out, masks = self._forward(batch)
                 loss, _         = self._compute_loss(main_out, masks)
 
@@ -433,6 +434,7 @@ class UnifiedTrainer:
 
                 if log_samples and len(sample_images) < max_samples:
                     img_key = 'pixel_values' if self.is_sam else 'image'
+                    print(f'img_key : {img_key}')
                     sample_images.append(batch[img_key][0].cpu())
                     sample_masks.append(masks[0].cpu())
                     sample_preds.append(preds[0].cpu())
