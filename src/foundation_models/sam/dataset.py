@@ -25,7 +25,8 @@ def create_dataset(data_dir, split):
     dataset_dict = {
         "image": [np.array(Image.open(image_path).convert('RGB')) for image_path in image_paths],
         "label": [np.array(Image.open(masks_dir / f"{image_path.stem}.png").convert('L')) for image_path in image_paths],
-        "image_path" : [os.path.basename(image_path) for image_path in image_paths]
+        "image_path" : [os.path.basename(image_path) for image_path in image_paths],
+        "image_full_path" : [str(image_path) for image_path in image_paths],
         }
     dataset = InitialDataset.from_dict(dataset_dict)
     print(dataset.shape)
@@ -180,9 +181,10 @@ class SAMDataset(Dataset):
 
         # Add ground truth segmentation as a torch tensor
         inputs["ground_truth_mask"] = torch.from_numpy(ground_truth_mask).float()
-        # inputs["image"] = image
-        # inputs["mask"] = ground_truth_mask
+        inputs["image"] = image
+        inputs["mask"] = ground_truth_mask
         inputs["image_path"] = item["image_path"]
+        inputs["image_full_path"] = item["image_full_path"]
 
         return inputs
 
@@ -281,7 +283,7 @@ def read_batch(item):
 
 if __name__ == '__main__':
     # FIX 2: Use raw string for Windows paths to avoid SyntaxWarning
-    data_dir = r'dataset\processed_512_resized' 
+    data_dir = r'dataset\processed_512_resized\sequential'
     dataset = create_dataset(data_dir, 'train')
     
     processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
@@ -295,84 +297,88 @@ if __name__ == '__main__':
     
     train_features = batch['pixel_values']
     train_labels = batch['ground_truth_mask']
-    
     print(f"Images shape: {train_features.shape}")
     print(f"Masks shape: {train_labels.shape}")
 
-    from transformers import SamModel
-    model = SamModel.from_pretrained("facebook/sam-vit-base")
+    image = batch['image']
+    mask = batch['mask']
+    print(f"image shape: {image.shape}")
+    print(f"mask shape: {mask.shape}")
 
-    # make sure we only compute gradients for mask decoder
-    for name, param in model.named_parameters():
-        if name.startswith("vision_encoder") or name.startswith("prompt_encoder"):
-            param.requires_grad_(False)
-
-    from torch.optim import Adam
-    # Initialize the optimizer and the loss function
-    optimizer = Adam(model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
-    #Try DiceFocalLoss, FocalLoss, DiceCELoss
-    criterion = get_loss_function(
-                'combined',
-                bce_weight      = 1.0,
-                dice_weight     = 1.0,
-                boundary_weight = 1.0,
-                use_boundary    = False,
-            )
-
-    from tqdm import tqdm
-    from statistics import mean
-    import torch
-    from torch.nn.functional import threshold, normalize
-
-    #Training loop
-    num_epochs = 1
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-
-    model.train()
-    for epoch in range(num_epochs):
-        epoch_losses = []
-        for batch in tqdm(train_dataloader):
-            # forward pass
-            outputs = model(pixel_values=batch["pixel_values"].to(device),
-                            input_boxes=batch["input_boxes"].to(device),
-                            multimask_output=False)
-
-            # compute loss
-            predicted_masks = outputs.pred_masks
-            print(f'predicted_masks type: {type(predicted_masks)}')
-            print(f'predicted_masks shape: {predicted_masks.shape}')
-
-            predicted_masks = predicted_masks.squeeze(1).squeeze(1)
-            print(f'predicted_masks type: {type(predicted_masks)}')
-            print(f'predicted_masks shape: {predicted_masks.shape}')
-
-            # 3. Upsample to your Ground Truth size (e.g., 512x512)
-            # Resulting shape: [4, 512, 512]
-            predicted_masks = F.interpolate(
-                predicted_masks.unsqueeze(1), # interpolate expects [B, C, H, W], so add '1' channel
-                size=(512, 512), 
-                mode='bilinear', 
-                align_corners=False
-            ).squeeze(1) # Remove the channel dimension again if doing Binary Loss
-            
-            print(f'predicted_masks type: {type(predicted_masks)}')
-            print(f'predicted_masks shape: {predicted_masks.shape}')
-
-            ground_truth_masks = batch["ground_truth_mask"].float().to(device)
-            print(f'ground_truth_masks type: {type(ground_truth_masks)}')
-            print(f'ground_truth_masks shape: {ground_truth_masks.shape}')
-            loss, loss_dict = criterion(predicted_masks, ground_truth_masks, None)
-
-            # backward pass (compute gradients of parameters w.r.t. loss)
-            optimizer.zero_grad()
-            loss.backward()
-
-            # optimize
-            optimizer.step()
-            epoch_losses.append(loss.item())
-
-        print(f'EPOCH: {epoch}')
-        print(f'Mean loss: {mean(epoch_losses)}')
+    # from transformers import SamModel
+    # model = SamModel.from_pretrained("facebook/sam-vit-base")
+    #
+    # # make sure we only compute gradients for mask decoder
+    # for name, param in model.named_parameters():
+    #     if name.startswith("vision_encoder") or name.startswith("prompt_encoder"):
+    #         param.requires_grad_(False)
+    #
+    # from torch.optim import Adam
+    # # Initialize the optimizer and the loss function
+    # optimizer = Adam(model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
+    # #Try DiceFocalLoss, FocalLoss, DiceCELoss
+    # criterion = get_loss_function(
+    #             'combined',
+    #             bce_weight      = 1.0,
+    #             dice_weight     = 1.0,
+    #             boundary_weight = 1.0,
+    #             use_boundary    = False,
+    #         )
+    #
+    # from tqdm import tqdm
+    # from statistics import mean
+    # import torch
+    # from torch.nn.functional import threshold, normalize
+    #
+    # #Training loop
+    # num_epochs = 1
+    #
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # model.to(device)
+    #
+    # model.train()
+    # for epoch in range(num_epochs):
+    #     epoch_losses = []
+    #     for batch in tqdm(train_dataloader):
+    #         # forward pass
+    #         outputs = model(pixel_values=batch["pixel_values"].to(device),
+    #                         input_boxes=batch["input_boxes"].to(device),
+    #                         multimask_output=False)
+    #
+    #         # compute loss
+    #         predicted_masks = outputs.pred_masks
+    #         print(f'predicted_masks type: {type(predicted_masks)}')
+    #         print(f'predicted_masks shape: {predicted_masks.shape}')
+    #
+    #         predicted_masks = predicted_masks.squeeze(1).squeeze(1)
+    #         print(f'predicted_masks type: {type(predicted_masks)}')
+    #         print(f'predicted_masks shape: {predicted_masks.shape}')
+    #
+    #         # 3. Upsample to your Ground Truth size (e.g., 512x512)
+    #         # Resulting shape: [4, 512, 512]
+    #         predicted_masks = F.interpolate(
+    #             predicted_masks.unsqueeze(1), # interpolate expects [B, C, H, W], so add '1' channel
+    #             size=(512, 512),
+    #             mode='bilinear',
+    #             align_corners=False
+    #         ).squeeze(1) # Remove the channel dimension again if doing Binary Loss
+    #
+    #         print(f'predicted_masks type: {type(predicted_masks)}')
+    #         print(f'predicted_masks shape: {predicted_masks.shape}')
+    #
+    #         ground_truth_masks = batch["ground_truth_mask"].float().to(device)
+    #         print(f'ground_truth_masks type: {type(ground_truth_masks)}')
+    #         print(f'ground_truth_masks shape: {ground_truth_masks.shape}')
+    #         loss, loss_dict = criterion(predicted_masks, ground_truth_masks, None)
+    #
+    #         # backward pass (compute gradients of parameters w.r.t. loss)
+    #         optimizer.zero_grad()
+    #         loss.backward()
+    #
+    #         # optimize
+    #         optimizer.step()
+    #         epoch_losses.append(loss.item())
+    #
+    #     print(f'EPOCH: {epoch}')
+    #     print(f'Mean loss: {mean(epoch_losses)}')
 
