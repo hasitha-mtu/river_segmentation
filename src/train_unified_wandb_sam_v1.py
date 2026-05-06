@@ -69,7 +69,6 @@ class UnifiedTrainer:
         # ── Mode flag ─────────────────────────────────────────────────────
         model_name  = config['model']['name']
         variant     = config['model'].get('variant', None)
-        self.is_sam = (model_name == 'sam' or model_name == 'sam_fpn' or model_name == 'sam_finetuned')
 
         # ── Model ─────────────────────────────────────────────────────────
         print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
@@ -276,7 +275,6 @@ class UnifiedTrainer:
         print('TRAINING CONFIGURATION')
         print(f'{"="*80}')
         print(f'Device     : {self.device}')
-        print(f'Mode       : {"SAM fine-tuning (mask_decoder only)" if self.is_sam else "Standard"}')
         print(f'Model      : {self.config["model"]["name"]}', end='')
         if self.config['model'].get('variant'):
             print(f' ({self.config["model"]["variant"]})')
@@ -285,9 +283,6 @@ class UnifiedTrainer:
         total_params     = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f'Parameters : {total_params:,}  (trainable: {trainable_params:,})')
-        if self.is_sam:
-            decoder_params = sum(p.numel() for p in self.model.mask_decoder.parameters())
-            print(f'  mask_decoder: {decoder_params:,}')
         print(f'Batch size : {self.config["training"]["batch_size"]}')
         print(f'LR         : {self.config["training"]["optimizer"]["learning_rate"]}')
         print(f'Optimizer  : {self.config["training"]["optimizer"]["type"]}')
