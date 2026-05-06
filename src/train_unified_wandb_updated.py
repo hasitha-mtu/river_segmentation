@@ -749,6 +749,7 @@ class UnifiedTrainer:
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(tqdm(self.val_loader, desc='Validation')):
+                print(f'batch keys: {batch.keys()}')
                 main_out, aux_out, masks = self._forward(batch)
                 loss, _                  = self._compute_loss(main_out, masks, aux_out)
 
