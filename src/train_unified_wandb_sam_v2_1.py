@@ -49,7 +49,7 @@ class UnifiedTrainer:
         variant    = config['model'].get('variant', None)
         print(f'\nInitializing {model_name}' + (f' ({variant})' if variant else '') + '…')
 
-        ckpt_base = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2'
+        ckpt_base = './checkpoints/sam2'
         variant_map = {
             'sam2.1_hiera_tiny'      : ('configs/sam2.1/sam2.1_hiera_t.yaml',  'sam2.1_hiera_tiny.pt'),
             'sam2.1_hiera_small'     : ('configs/sam2.1/sam2.1_hiera_s.yaml',  'sam2.1_hiera_small.pt'),
