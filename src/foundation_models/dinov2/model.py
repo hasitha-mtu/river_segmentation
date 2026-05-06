@@ -79,6 +79,17 @@ class DINOv2Segmentation(nn.Module):
                            int(mask_dim[0]), int(mask_dim[1]))
 
         x = self.head(x)
+        # ── Upsample output back to original input resolution ─────────────
+        # conv_head 4× upsamples the patch-grid feature map, producing a
+        # spatial size that depends on the padded input (e.g. 148×148 for
+        # 518 input).  Interpolate back to the original H×W so that the
+        # output always matches the ground-truth mask dimensions.
+        if x.shape[2] != H_orig or x.shape[3] != W_orig:
+            x = torch.nn.functional.interpolate(
+                x, size=(H_orig, W_orig), mode='bilinear', align_corners=False,
+            )
+
+        return x
 
 
 def build_dinov2_segmentation(num_classes: int = 1, 
