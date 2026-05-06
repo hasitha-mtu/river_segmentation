@@ -474,17 +474,17 @@ class UnifiedTrainer:
     def setup_directories(self):
         model_name = self.config['model']['name']
         variant    = self.config['model'].get('variant', None)
+        output_dir = self.config['system']['output_dir']
 
         if variant is None:
-            exp_name = f'{model_name}'
+            self.model_dir = os.path.join(output_dir, model_name)
+            self.exp_dir = self.model_dir
         else:
-            exp_name = f'{model_name}_{variant}'
+            self.model_dir = os.path.join(output_dir, model_name)
+            self.exp_dir = os.path.join(self.model_dir, variant)
 
-        output_dir           = self.config['system']['output_dir']
-        self.model_dir       = os.path.join(output_dir, model_name)
-        self.exp_dir         = os.path.join(self.model_dir, exp_name)
-        self.checkpoint_dir  = os.path.join(self.exp_dir, 'checkpoints')
-        self.log_dir         = os.path.join(self.exp_dir, 'logs')
+        self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
+        self.log_dir = os.path.join(self.exp_dir, 'logs')
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
@@ -1169,23 +1169,23 @@ def train_all_models(base_config: dict):
     # }
 
     all_models = {
-        # CNN baselines
-        'unet': [],
-        'unetpp': [],
-        'resunetpp': [],
-        'deeplabv3plus': [],
-        'deeplabv3plus_cbam': [],
-        # Transformers
-        'segformer': ['b0'],
-        'swin_unet': ['tiny'],
-        # Hybrid SOTA
-        'convnext_upernet': ['tiny'],
-        'hrnet_ocr': ['w18'],
-        # # Foundation models
-        'sam': ['vit_b'],
-        'sam_fpn': ['vit_b'],
-        'dinov2': ['vit_s'],
-        'dinov2_Mask2Former': ['vit_s'],
+        # # CNN baselines
+        # 'unet': [],
+        # 'unetpp': [],
+        # 'resunetpp': [],
+        # 'deeplabv3plus': [],
+        # 'deeplabv3plus_cbam': [],
+        # # Transformers
+        # 'segformer': ['b0'],
+        # 'swin_unet': ['tiny'],
+        # # Hybrid SOTA
+        # 'convnext_upernet': ['tiny'],
+        # 'hrnet_ocr': ['w18'],
+        # # # Foundation models
+        # 'sam': ['vit_b'],
+        # 'sam_fpn': ['vit_b'],
+        # 'dinov2': ['vit_s'],
+        # 'dinov2_Mask2Former': ['vit_s'],
         'sam_v1_fine_tuned': ['vit_b'],
         'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     }
