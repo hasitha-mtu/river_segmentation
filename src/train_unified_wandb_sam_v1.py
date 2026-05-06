@@ -220,7 +220,7 @@ class UnifiedTrainer:
         ]
 
         wandb.init(
-            project = self.config['logging'].get('wandb_project', 'river-segmentation'),
+            project = self.config['logging'].get('wandb_project', 'river-segmentation-v2'),
             name    = run_name,
             config  = self.config,
             tags    = tags,

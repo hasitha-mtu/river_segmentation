@@ -198,7 +198,7 @@ class UnifiedTrainer:
             f'img_{self.config["data"].get("image_size", 512)}',
         ]
         wandb.init(
-            project = self.config['logging'].get('wandb_project', 'river-segmentation'),
+            project = self.config['logging'].get('wandb_project', 'river-segmentation-v2'),
             name    = run_name,
             config  = self.config,
             tags    = tags,
