@@ -1235,7 +1235,8 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    dataset_variations  = ['sequential', 'stratified', 'alternative']
+    # dataset_variations  = ['sequential', 'stratified', 'alternative']
+    dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
@@ -1245,7 +1246,7 @@ def main():
         print(f'output_dir: {default_config['system']['output_dir']}')
 
         default_config['training']['epochs'] = 1
-        default_config['logging']['use_wandb'] = False
+        # default_config['logging']['use_wandb'] = False
 
         data_root = default_config['data']['data_root']
         data_root = f'{data_root}/{dataset_variation}'
