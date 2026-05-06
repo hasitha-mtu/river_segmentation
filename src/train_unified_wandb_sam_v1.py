@@ -251,15 +251,18 @@ class UnifiedTrainer:
 
     def setup_directories(self):
         model_name = self.config['model']['name']
-        variant    = self.config['model'].get('variant', None)
+        variant = self.config['model'].get('variant', None)
+        output_dir = self.config['system']['output_dir']
 
-        exp_name = f'{model_name}_{variant}' if variant else f'{model_name}'
+        if variant is None:
+            self.model_dir = os.path.join(output_dir, model_name)
+            self.exp_dir = self.model_dir
+        else:
+            self.model_dir = os.path.join(output_dir, model_name)
+            self.exp_dir = os.path.join(self.model_dir, variant)
 
-        output_dir          = self.config['system']['output_dir']
-        self.model_dir      = os.path.join(output_dir, model_name)
-        self.exp_dir        = os.path.join(self.model_dir, exp_name)
         self.checkpoint_dir = os.path.join(self.exp_dir, 'checkpoints')
-        self.log_dir        = os.path.join(self.exp_dir, 'logs')
+        self.log_dir = os.path.join(self.exp_dir, 'logs')
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
