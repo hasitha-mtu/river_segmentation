@@ -1169,23 +1169,23 @@ def train_all_models(base_config: dict):
     # }
 
     all_models = {
-        # # CNN baselines
-        # 'unet': [],
-        # 'unetpp': [],
-        # 'resunetpp': [],
-        # 'deeplabv3plus': [],
-        # 'deeplabv3plus_cbam': [],
-        # # Transformers
-        # 'segformer': ['b0'],
-        # 'swin_unet': ['tiny'],
-        # # Hybrid SOTA
-        # 'convnext_upernet': ['tiny'],
-        # 'hrnet_ocr': ['w18'],
-        # # # Foundation models
-        # 'sam': ['vit_b'],
-        # 'sam_fpn': ['vit_b'],
-        # 'dinov2': ['vit_s'],
-        # 'dinov2_Mask2Former': ['vit_s'],
+        # CNN baselines
+        'unet': [],
+        'unetpp': [],
+        'resunetpp': [],
+        'deeplabv3plus': [],
+        'deeplabv3plus_cbam': [],
+        # Transformers
+        'segformer': ['b0'],
+        'swin_unet': ['tiny'],
+        # Hybrid SOTA
+        'convnext_upernet': ['tiny'],
+        'hrnet_ocr': ['w18'],
+        # # Foundation models
+        'sam': ['vit_b'],
+        'sam_fpn': ['vit_b'],
+        'dinov2': ['vit_s'],
+        'dinov2_Mask2Former': ['vit_s'],
         'sam_v1_fine_tuned': ['vit_b'],
         'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     }
