@@ -774,7 +774,7 @@ class UnifiedTrainer:
 
                 if log_samples and len(sample_images) < max_samples:
                     # Log local patch as the primary image
-                    img_key = 'pixel_values' if self.is_sam else 'image'
+                    img_key = 'input_tensor' if self.is_sam else 'image'
                     sample_images.append(batch[img_key][0].cpu())
                     # sample_images.append(batch['image'][0].cpu())
                     sample_masks.append(masks[0].cpu())
