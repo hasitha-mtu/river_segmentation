@@ -1216,14 +1216,16 @@ def train_all_models(base_config: dict):
                     'early_stopping_patience' : 20,
                     'early_stopping_min_delta': 1e-4,
                 }
+
+            print(f'train_single_model|model_name: {model_name}')
             if model_name == 'sam_v2_fine_tuned':
                 train_single_model_sam_v2_fine_tuned(config)
-            if model_name == 'sam_v1_fine_tuned':
+            elif model_name == 'sam_v1_fine_tuned':
                 train_single_model_sam_v1_fine_tuned(config)
-            if model_name == 'dinov2_Mask2Former':
+            elif model_name == 'dinov2_Mask2Former':
                 train_single_model_dinov2_Mask2Former(config)
             else:
-                print(f'train_single_model|model_name: {model_name}')
+                print(f'train_single_model|model_name: {model_name} with common module')
                 train_single_model(config)
 
             if torch.cuda.is_available():
