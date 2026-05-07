@@ -330,10 +330,14 @@ class MetricAccumulator:
 
 def discover_checkpoints(experiments_dir: str) -> list[Path]:
     """
-    Walk the experiments directory and collect all ``best.pth`` files.
+    Walk the experiments directory and collect all ``best.pth`` files,
+    excluding any files stored under wandb directories.
     Returns paths sorted alphabetically for reproducibility.
     """
-    ckpts = sorted(Path(experiments_dir).rglob('checkpoints/best.pth'))
+    ckpts = sorted(
+        p for p in Path(experiments_dir).rglob('checkpoints/best.pth')
+        if 'wandb' not in p.parts
+    )
     print(f'\nDiscovered {len(ckpts)} checkpoint(s) under: {experiments_dir}')
     for p in ckpts:
         print(f'  {p.relative_to(experiments_dir)}')
