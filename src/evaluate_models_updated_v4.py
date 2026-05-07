@@ -861,11 +861,106 @@ def save_prediction_overlays_sam_v2_fine_tuned(
         loader        : DataLoader,
         device        : torch.device,
         out_dir       : Path,
-        is_sam         : bool = False,
         n_samples     : int = 8,
         threshold     : float = 0.5
     ):
-    pass
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    model.eval()
+
+    predictor = SAM2ImagePredictor(model)
+
+    with torch.no_grad():
+        for batch in loader:
+            if saved >= n_samples:
+                break
+            with torch.amp.autocast('cuda'):
+                predictor.set_image_batch([item['image'] for item in batch])
+            for i, item in enumerate(batch):
+                input_point = item['points']  # (N, 2) numpy
+                num_masks = item['labels_size']
+                input_label = np.ones((num_masks, 1), dtype=np.int32)
+
+                mask_input, unnorm_coords, labels, _ = predictor._prep_prompts(
+                    input_point, input_label,
+                    box=None, mask_logits=None,
+                    normalize_coords=True,
+                    img_idx=i,
+                )
+
+                if unnorm_coords is None or unnorm_coords.shape[0] == 0:
+                    continue
+
+                image_embed = predictor._features['image_embed'][i].unsqueeze(0)  # [1, C, H, W]
+                high_res_feats = [
+                    feat_level[i].unsqueeze(0)  # [1, C, H, W]
+                    for feat_level in predictor._features['high_res_feats']
+                ]
+
+                # Prompt encoder: points → sparse & dense embeddings.
+                sparse_emb, dense_emb = predictor.model.sam_prompt_encoder(
+                    points=(unnorm_coords, labels),
+                    boxes=None,
+                    masks=None,
+                )
+
+                # Mask decoder: embeddings → low-res logit masks + IoU scores.
+                batched_mode = unnorm_coords.shape[0] > 1
+                low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
+                    image_embeddings=image_embed,
+                    image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                    sparse_prompt_embeddings=sparse_emb,
+                    dense_prompt_embeddings=dense_emb,
+                    multimask_output=True,
+                    repeat_image=batched_mode,
+                    high_res_features=high_res_feats,
+                )
+                prd_logits = predictor._transforms.postprocess_masks(
+                    low_res_masks, predictor._orig_hw[i]
+                )
+                predicted_mask = prd_logits[:, 0]
+
+                gt_mask = torch.as_tensor(
+                    item['mask'].astype(np.float32), device=device
+                )
+
+                masks = gt_mask.float().to(device)
+                probs = torch.sigmoid(predicted_mask).cpu()
+                preds = (probs > threshold).float()
+
+                masks = masks.squeeze(0)  # (1, 512, 512) → (512, 512)
+                preds = preds.squeeze(0)  # (1, 512, 512) → (512, 512)
+
+                image_full_path = item['image_path']
+
+                orig_h = int(item['image'].shape[0])
+                orig_w = int(item['image'].shape[1])
+
+                img_pil = Image.open(image_full_path).convert('RGB').resize(
+                    (orig_w, orig_h), Image.BILINEAR
+                )
+                img_np = np.array(img_pil).astype(np.float32) / 255.0
+
+                mask_np = masks.cpu().numpy()  # (512, 512)
+                pred_np = preds.numpy()  # (512, 512)
+
+                img_u8 = (img_np * 255).astype(np.uint8)
+                gt_u8 = np.stack([(mask_np * 255).astype(np.uint8)] * 3, axis=2)
+                pred_u8 = np.stack([(pred_np * 255).astype(np.uint8)] * 3, axis=2)
+
+                overlay = img_u8.copy()
+                gt_mask = mask_np > 0.5
+                pred_mask = pred_np > 0.5
+
+                overlay[gt_mask & pred_mask] = [255, 255, 0]  # TP  yellow
+                overlay[gt_mask & ~pred_mask] = [0, 200, 0]  # FN  green
+                overlay[~gt_mask & pred_mask] = [200, 0, 0]  # FP  red
+
+                strip = np.concatenate([img_u8, gt_u8, pred_u8, overlay], axis=1)
+                Image.fromarray(strip).save(out_dir / f'{saved:04d}_{Path(image_full_path).stem}.png')
+                saved += 1
+
+
 
 def save_prediction_overlays(
     model         : nn.Module,
@@ -1214,39 +1309,47 @@ def main():
         pred_dir = output_dir / 'predictions' / display_name
         print(f'  Saving {args.num_pred_samples} prediction overlays → {pred_dir}')
         model_name = config['model']['name']
-
-        try:
-            if model_name == 'sam_v1_fine_tuned':
-                save_prediction_overlays_sam_v1_fine_tuned(
-                    model=model,
-                    loader=test_loader,
-                    device=device,
-                    out_dir=pred_dir,
-                    n_samples=args.num_pred_samples,
-                    threshold=args.threshold
-                )
-            elif model_name == 'sam_v2_fine_tuned':
-                save_prediction_overlays_sam_v2_fine_tuned(
-                    model=model,
-                    loader=test_loader,
-                    device=device,
-                    out_dir=pred_dir,
-                    is_sam=is_sam,
-                    n_samples=args.num_pred_samples,
-                    threshold=args.threshold
-                )
-            else:
-                save_prediction_overlays(
-                    model=model,
-                    loader=test_loader,
-                    device=device,
-                    out_dir=pred_dir,
-                    is_sam=is_sam,
-                    n_samples=args.num_pred_samples,
-                    threshold=args.threshold
-                )
-        except Exception as e:
-            print(f'  [WARN] Could not save overlays: {e}')
+        if model_name == 'sam_v2_fine_tuned':
+            save_prediction_overlays_sam_v2_fine_tuned(
+                model=model,
+                loader=test_loader,
+                device=device,
+                out_dir=pred_dir,
+                n_samples=args.num_pred_samples,
+                threshold=args.threshold
+            )
+        # try:
+        #     if model_name == 'sam_v1_fine_tuned':
+        #         save_prediction_overlays_sam_v1_fine_tuned(
+        #             model=model,
+        #             loader=test_loader,
+        #             device=device,
+        #             out_dir=pred_dir,
+        #             n_samples=args.num_pred_samples,
+        #             threshold=args.threshold
+        #         )
+        #     elif model_name == 'sam_v2_fine_tuned':
+        #         save_prediction_overlays_sam_v2_fine_tuned(
+        #             model=model,
+        #             loader=test_loader,
+        #             device=device,
+        #             out_dir=pred_dir,
+        #             is_sam=is_sam,
+        #             n_samples=args.num_pred_samples,
+        #             threshold=args.threshold
+        #         )
+        #     else:
+        #         save_prediction_overlays(
+        #             model=model,
+        #             loader=test_loader,
+        #             device=device,
+        #             out_dir=pred_dir,
+        #             is_sam=is_sam,
+        #             n_samples=args.num_pred_samples,
+        #             threshold=args.threshold
+        #         )
+        # except Exception as e:
+        #     print(f'  [WARN] Could not save overlays: {e}')
 
         # ── Collect result record ─────────────────────────────────────────────
         result = {
