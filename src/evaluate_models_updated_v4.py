@@ -378,7 +378,7 @@ def build_model_from_config(config: dict, ckpt: dict, device: torch.device, ckpt
         model = sam_model_registry[variant](checkpoint=sam_ckpt)
         model.load_state_dict(ckpt['model_state_dict'])
     elif model_name == 'sam_v2_fine_tuned':
-        ckpt_base = r'c:/Users/AdikariAdikari/PycharmProjects/river_segmentation/checkpoints/sam2'
+        ckpt_base = './checkpoints/sam2'
         variant_map = {
             'sam2.1_hiera_tiny': ('configs/sam2.1/sam2.1_hiera_t.yaml', 'sam2.1_hiera_tiny.pt'),
             'sam2.1_hiera_small': ('configs/sam2.1/sam2.1_hiera_s.yaml', 'sam2.1_hiera_small.pt'),
@@ -803,9 +803,7 @@ def save_prediction_overlays_sam_v1_fine_tuned(
         for batch in loader:
             if saved >= n_samples:
                 break
-            print(f'batch keys: {batch.keys()}')
             image_full_paths = batch['image_full_path']
-            print(f'image_full_paths: {image_full_paths}')
             outputs = model(pixel_values=batch["pixel_values"].to(device),
                                  input_boxes=batch["input_boxes"].to(device),
                                  multimask_output=False)
@@ -820,9 +818,6 @@ def save_prediction_overlays_sam_v1_fine_tuned(
             ).squeeze(1)  # Remove the channel dimension again if doing Binary Loss
 
             masks = batch["ground_truth_mask"].float().to(device)
-
-            print(f'predicted_masks shape: {predicted_masks.shape}')
-            print(f'masks shape: {masks.shape}')
 
             probs = torch.sigmoid(predicted_masks).cpu()
             preds = (probs > threshold).float()
@@ -959,7 +954,6 @@ def save_prediction_overlays_sam_v2_fine_tuned(
                 strip = np.concatenate([img_u8, gt_u8, pred_u8, overlay], axis=1)
                 Image.fromarray(strip).save(out_dir / f'{saved:04d}_{Path(image_full_path).stem}.png')
                 saved += 1
-
 
 
 def save_prediction_overlays(
