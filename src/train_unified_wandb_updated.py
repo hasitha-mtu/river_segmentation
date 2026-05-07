@@ -1074,7 +1074,7 @@ def get_default_config():
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 1,
+            'epochs'    : 100,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -1144,51 +1144,49 @@ def train_single_model(config: dict):
 
 def train_all_models(base_config: dict):
     print(f'train_all_models|base_config: {base_config}')
-    """Train all SAM variants (and optionally DINOv2) sequentially."""
+    all_models = {
+        # CNN baselines
+        'unet'                : [],
+        'unetpp'              : [],
+        'resunetpp'           : [],
+        'deeplabv3plus'       : [],
+        'deeplabv3plus_cbam'  : [],
+        # Transformers
+        'segformer'           : ['b0', 'b2'],
+        'swin_unet'           : ['tiny'],
+        # Hybrid SOTA
+        'convnext_upernet'    : ['tiny', 'small', 'base'],
+        'hrnet_ocr'           : ['w18', 'w32', 'w48'],
+        # # Foundation models
+        'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
+        'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
+        'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
+        'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
+        'sam_v1_fine_tuned'   : ['vit_b', 'vit_l', 'vit_h'],
+        'sam_v2_fine_tuned'   : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
+    }
 
     # all_models = {
     #     # CNN baselines
-    #     'unet'                : [],
-    #     'unetpp'              : [],
-    #     'resunetpp'           : [],
-    #     'deeplabv3plus'       : [],
-    #     'deeplabv3plus_cbam'  : [],
+    #     'unet': [],
+    #     'unetpp': [],
+    #     'resunetpp': [],
+    #     'deeplabv3plus': [],
+    #     'deeplabv3plus_cbam': [],
     #     # Transformers
-    #     'segformer'           : ['b0', 'b2'],
-    #     'swin_unet'           : ['tiny'],
+    #     'segformer': ['b0'],
+    #     'swin_unet': ['tiny'],
     #     # Hybrid SOTA
-    #     'convnext_upernet'    : ['tiny', 'small', 'base'],
-    #     'hrnet_ocr'           : ['w18', 'w32', 'w48'],
-    #     # # Foundation models
-    #     'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
-    #     'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
-    #     'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
-    #     'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
-    #     'sam_v1_fine_tuned'   : ['vit_b', 'vit_l', 'vit_h'],
-    #     'sam_v2_fine_tuned'   : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
+    #     'convnext_upernet': ['tiny'],
+    #     'hrnet_ocr': ['w18'],
+    #     # Foundation models
+    #     'sam': ['vit_b'],
+    #     'sam_fpn': ['vit_b'],
+    #     'dinov2': ['vit_s'],
+    #     'dinov2_Mask2Former': ['vit_s'],
+    #     'sam_v1_fine_tuned': ['vit_b'],
+    #     'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
     # }
-
-    all_models = {
-        # CNN baselines
-        'unet': [],
-        'unetpp': [],
-        'resunetpp': [],
-        'deeplabv3plus': [],
-        'deeplabv3plus_cbam': [],
-        # Transformers
-        'segformer': ['b0'],
-        'swin_unet': ['tiny'],
-        # Hybrid SOTA
-        'convnext_upernet': ['tiny'],
-        'hrnet_ocr': ['w18'],
-        # Foundation models
-        'sam': ['vit_b'],
-        'sam_fpn': ['vit_b'],
-        'dinov2': ['vit_s'],
-        'dinov2_Mask2Former': ['vit_s'],
-        'sam_v1_fine_tuned': ['vit_b'],
-        'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
-    }
 
 
     # Foundation models use early stopping to prevent overfitting on the
@@ -1237,8 +1235,8 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    dataset_variations  = ['sequential']
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
+    # dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
