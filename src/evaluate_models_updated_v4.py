@@ -1148,11 +1148,11 @@ def parse_args():
                   --save_predictions --num_pred_samples 8
         '''),
     )
-    p.add_argument('--experiments_dir', default='./experiments',
+    p.add_argument('--experiments_dir', default=r'D:/hasitha/river_segmentation/experiments',
                    help='Root directory of saved experiment checkpoints.')
     p.add_argument('--data_root', default='./dataset/processed_512_resized/sequential',
                    help='Root of the standard (resized) dataset.')
-    p.add_argument('--output_dir', default='./results',
+    p.add_argument('--output_dir', default=r'D:/hasitha/river_segmentation/results',
                    help='Directory for output CSV, summaries, and prediction images.')
     p.add_argument('--batch_size', type=int, default=4)
     p.add_argument('--num_workers', type=int, default=0)
