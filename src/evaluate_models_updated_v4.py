@@ -1154,11 +1154,11 @@ def parse_args():
                   --save_predictions --num_pred_samples 8
         '''),
     )
-    p.add_argument('--experiments_dir', default=r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\experiments',
+    p.add_argument('--experiments_dir', default='./experiments',
                    help='Root directory of saved experiment checkpoints.')
-    p.add_argument('--data_root', default=r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\dataset\processed_512_resized\sequential',
+    p.add_argument('--data_root', default='./dataset/processed_512_resized/sequential',
                    help='Root of the standard (resized) dataset.')
-    p.add_argument('--output_dir', default=r'C:\Users\AdikariAdikari\PycharmProjects\river_segmentation\results',
+    p.add_argument('--output_dir', default='./results',
                    help='Directory for output CSV, summaries, and prediction images.')
     p.add_argument('--batch_size', type=int, default=4)
     p.add_argument('--num_workers', type=int, default=0)
@@ -1309,47 +1309,37 @@ def main():
         pred_dir = output_dir / 'predictions' / display_name
         print(f'  Saving {args.num_pred_samples} prediction overlays → {pred_dir}')
         model_name = config['model']['name']
-        if model_name == 'sam_v2_fine_tuned':
-            save_prediction_overlays_sam_v2_fine_tuned(
-                model=model,
-                loader=test_loader,
-                device=device,
-                out_dir=pred_dir,
-                n_samples=args.num_pred_samples,
-                threshold=args.threshold
-            )
-        # try:
-        #     if model_name == 'sam_v1_fine_tuned':
-        #         save_prediction_overlays_sam_v1_fine_tuned(
-        #             model=model,
-        #             loader=test_loader,
-        #             device=device,
-        #             out_dir=pred_dir,
-        #             n_samples=args.num_pred_samples,
-        #             threshold=args.threshold
-        #         )
-        #     elif model_name == 'sam_v2_fine_tuned':
-        #         save_prediction_overlays_sam_v2_fine_tuned(
-        #             model=model,
-        #             loader=test_loader,
-        #             device=device,
-        #             out_dir=pred_dir,
-        #             is_sam=is_sam,
-        #             n_samples=args.num_pred_samples,
-        #             threshold=args.threshold
-        #         )
-        #     else:
-        #         save_prediction_overlays(
-        #             model=model,
-        #             loader=test_loader,
-        #             device=device,
-        #             out_dir=pred_dir,
-        #             is_sam=is_sam,
-        #             n_samples=args.num_pred_samples,
-        #             threshold=args.threshold
-        #         )
-        # except Exception as e:
-        #     print(f'  [WARN] Could not save overlays: {e}')
+        try:
+            if model_name == 'sam_v1_fine_tuned':
+                save_prediction_overlays_sam_v1_fine_tuned(
+                    model=model,
+                    loader=test_loader,
+                    device=device,
+                    out_dir=pred_dir,
+                    n_samples=args.num_pred_samples,
+                    threshold=args.threshold
+                )
+            elif model_name == 'sam_v2_fine_tuned':
+                save_prediction_overlays_sam_v2_fine_tuned(
+                    model=model,
+                    loader=test_loader,
+                    device=device,
+                    out_dir=pred_dir,
+                    n_samples=args.num_pred_samples,
+                    threshold=args.threshold
+                )
+            else:
+                save_prediction_overlays(
+                    model=model,
+                    loader=test_loader,
+                    device=device,
+                    out_dir=pred_dir,
+                    is_sam=is_sam,
+                    n_samples=args.num_pred_samples,
+                    threshold=args.threshold
+                )
+        except Exception as e:
+            print(f'  [WARN] Could not save overlays: {e}')
 
         # ── Collect result record ─────────────────────────────────────────────
         result = {
