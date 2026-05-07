@@ -1216,6 +1216,7 @@ def train_all_models(base_config: dict):
                 }
 
             print(f'train_single_model|model_name: {model_name}')
+            print(f'train_single_model|config: {config}')
             if model_name == 'sam_v2_fine_tuned':
                 train_single_model_sam_v2_fine_tuned(config)
             elif model_name == 'sam_v1_fine_tuned':
