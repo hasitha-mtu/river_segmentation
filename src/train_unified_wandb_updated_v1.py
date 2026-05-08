@@ -1133,7 +1133,7 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2',
+            'wandb_project'   : 'river-segmentation-v2.1',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
