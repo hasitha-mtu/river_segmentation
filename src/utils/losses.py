@@ -165,7 +165,7 @@ class CombinedLoss(nn.Module):
         loss_dict['main'] = total_loss.item()
         
         # Add boundary loss if enabled
-        if self.use_boundary:
+        if self.use_boundary and self.training:
             boundary = self.boundary(predictions, targets)
             loss_dict['boundary'] = boundary.item()
             total_loss += self.boundary_weight * boundary
@@ -183,7 +183,7 @@ class CombinedLoss(nn.Module):
             aux_loss = self.bce_weight * aux_bce + self.dice_weight * aux_dice
             
             # Add auxiliary boundary if enabled
-            if self.use_boundary:
+            if self.use_boundary and self.training:
                 aux_boundary = self.boundary(aux_predictions, targets)
                 loss_dict['aux_boundary'] = aux_boundary.item()
                 aux_loss += self.boundary_weight * aux_boundary
