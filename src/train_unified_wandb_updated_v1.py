@@ -1269,7 +1269,8 @@ def train_all_models(base_config: dict):
 
 def main():
     # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    dataset_variations  = ['stratified', 'alternative']
+    # dataset_variations  = ['stratified', 'alternative']
+    dataset_variations  = ['stratified']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
