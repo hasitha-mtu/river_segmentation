@@ -1190,7 +1190,8 @@ def train_all_models(base_config: dict):
         # 'convnext_upernet'    : ['tiny', 'small', 'base'],
         # 'hrnet_ocr'           : ['w18', 'w32', 'w48'],
         # # Foundation models = 15
-        'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
+        # 'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
+        'sam': ['vit_l', 'vit_h'],
         'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
         'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
         'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
