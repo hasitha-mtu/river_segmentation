@@ -1178,17 +1178,17 @@ def train_all_models(base_config: dict):
     print(f'train_all_models|base_config: {base_config}')
     all_models = {
         # CNN baselines = 5
-        'unet'                : [],
-        'unetpp'              : [],
-        'resunetpp'           : [],
-        'deeplabv3plus'       : [],
-        'deeplabv3plus_cbam'  : [],
-        # Transformers = 3
-        'segformer'           : ['b0', 'b2'],
-        'swin_unet'           : ['tiny'],
-        # Hybrid SOTA = 6
-        'convnext_upernet'    : ['tiny', 'small', 'base'],
-        'hrnet_ocr'           : ['w18', 'w32', 'w48'],
+        # 'unet'                : [],
+        # 'unetpp'              : [],
+        # 'resunetpp'           : [],
+        # 'deeplabv3plus'       : [],
+        # 'deeplabv3plus_cbam'  : [],
+        # # Transformers = 3
+        # 'segformer'           : ['b0', 'b2'],
+        # 'swin_unet'           : ['tiny'],
+        # # Hybrid SOTA = 6
+        # 'convnext_upernet'    : ['tiny', 'small', 'base'],
+        # 'hrnet_ocr'           : ['w18', 'w32', 'w48'],
         # # Foundation models = 15
         'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
         'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
