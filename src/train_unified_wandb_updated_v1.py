@@ -1133,7 +1133,7 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2.1',
+            'wandb_project'   : 'river-segmentation-v2.2',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
@@ -1142,8 +1142,8 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            # 'output_dir'   : './experiments',
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments',
+            'output_dir'   : './experiments',
+            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1269,9 +1269,9 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # dataset_variations  = ['sequential', 'stratified', 'alternative']
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
     # dataset_variations  = ['stratified', 'alternative']
-    dataset_variations  = ['alternative']
+    # dataset_variations  = ['alternative']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
@@ -1286,7 +1286,10 @@ def main():
         data_root = default_config['data']['data_root']
         data_root = f'{data_root}/{dataset_variation}'
         output_dir = default_config['system']['output_dir']
-        output_dir = f'{output_dir}/{dataset_variation}'
+
+        seed = default_config['system']['seed']
+
+        output_dir = f'{output_dir}/{seed}/{dataset_variation}'
 
         default_config['data']['data_root'] = data_root
         default_config['system']['output_dir'] = output_dir
