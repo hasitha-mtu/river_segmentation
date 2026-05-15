@@ -14,7 +14,7 @@ from torchvision import transforms
 from tqdm import tqdm
 import wandb
 
-from models import get_model
+from src.models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
