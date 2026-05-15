@@ -1142,7 +1142,7 @@ def get_default_config():
         'system': {
             'seed'         : 123,
             'num_workers'  : 0,
-            'output_dir'   : './experiments',
+            'output_dir'   : './experiments/123',
             'log_interval' : 10,
             'save_interval': 10,
         },
