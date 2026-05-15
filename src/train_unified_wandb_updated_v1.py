@@ -1140,9 +1140,9 @@ def get_default_config():
             'save_model_wandb': True,
         },
         'system': {
-            'seed'         : 42,
+            'seed'         : 123,
             'num_workers'  : 0,
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments',
+            'output_dir'   : './experiments',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1178,20 +1178,19 @@ def train_all_models(base_config: dict):
     print(f'train_all_models|base_config: {base_config}')
     all_models = {
         # CNN baselines = 5
-        # 'unet'                : [],
-        # 'unetpp'              : [],
-        # 'resunetpp'           : [],
-        # 'deeplabv3plus'       : [],
-        # 'deeplabv3plus_cbam'  : [],
-        # # Transformers = 3
-        # 'segformer'           : ['b0', 'b2'],
-        # 'swin_unet'           : ['tiny'],
-        # # Hybrid SOTA = 6
-        # 'convnext_upernet'    : ['tiny', 'small', 'base'],
-        # 'hrnet_ocr'           : ['w18', 'w32', 'w48'],
-        # # Foundation models = 15
-        # 'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
-        'sam': ['vit_l', 'vit_h'],
+        'unet'                : [],
+        'unetpp'              : [],
+        'resunetpp'           : [],
+        'deeplabv3plus'       : [],
+        'deeplabv3plus_cbam'  : [],
+        # Transformers = 3
+        'segformer'           : ['b0', 'b2'],
+        'swin_unet'           : ['tiny'],
+        # Hybrid SOTA = 6
+        'convnext_upernet'    : ['tiny', 'small', 'base'],
+        'hrnet_ocr'           : ['w18', 'w32', 'w48'],
+        # Foundation models = 15
+        'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
         'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
         'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
         'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
@@ -1269,9 +1268,9 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # dataset_variations  = ['sequential', 'stratified', 'alternative']
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
     # dataset_variations  = ['stratified', 'alternative']
-    dataset_variations  = ['stratified']
+    # dataset_variations  = ['stratified']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
