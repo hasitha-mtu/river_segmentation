@@ -1100,13 +1100,13 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_512_resized',
-            'image_size'   : 512,
+            'data_root'    : './dataset/processed_768_resized',
+            'image_size'   : 768,
             'augment_train': True
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 100,
+            'epochs'    : 1,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -1133,7 +1133,7 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2.3',
+            'wandb_project'   : 'river-segmentation-v2.4',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
@@ -1142,8 +1142,8 @@ def get_default_config():
         'system': {
             'seed'         : 123,
             'num_workers'  : 0,
-            # 'output_dir'   : './experiments',
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/123',
+            'output_dir'   : './experiments/768',
+            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/123',
             'log_interval' : 10,
             'save_interval': 10,
         },
