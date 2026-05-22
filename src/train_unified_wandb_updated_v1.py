@@ -1106,7 +1106,7 @@ def get_default_config():
         },
         'training': {
             'batch_size': 4,
-            'epochs'    : 1,
+            'epochs'    : 100,
             'clip_grad' : 1.0,
             'resume'    : False,
             'optimizer' : {
@@ -1140,7 +1140,7 @@ def get_default_config():
             'save_model_wandb': True,
         },
         'system': {
-            'seed'         : 123,
+            'seed'         : 42,
             'num_workers'  : 0,
             'output_dir'   : './experiments/768',
             # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/123',
@@ -1269,9 +1269,9 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # dataset_variations  = ['sequential', 'stratified', 'alternative']
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
     # dataset_variations  = ['stratified', 'alternative']
-    dataset_variations  = ['sequential']
+    # dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
