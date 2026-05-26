@@ -1201,17 +1201,17 @@ def train_all_models(base_config: dict):
 
     all_models = {
         # CNN baselines = 5
-        # 'unet': [],
-        # 'unetpp': [],
-        # 'resunetpp': [],
-        # 'deeplabv3plus': [],
-        # 'deeplabv3plus_cbam': [],
-        # # Transformers = 3
-        # 'segformer': ['b0'],
-        # 'swin_unet': ['tiny'],
-        # # Hybrid SOTA = 6
-        # 'convnext_upernet': ['tiny'],
-        # 'hrnet_ocr': ['w18'],
+        'unet': [],
+        'unetpp': [],
+        'resunetpp': [],
+        'deeplabv3plus': [],
+        'deeplabv3plus_cbam': [],
+        # Transformers = 3
+        'segformer': ['b0'],
+        'swin_unet': ['tiny'],
+        # Hybrid SOTA = 6
+        'convnext_upernet': ['tiny'],
+        'hrnet_ocr': ['w18'],
         # Foundation models = 15
         'sam': ['vit_b'],
         'sam_fpn': ['vit_b'],
@@ -1270,8 +1270,8 @@ def train_all_models(base_config: dict):
 
 def main():
     # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    # dataset_variations  = ['stratified', 'alternative']
-    dataset_variations  = ['sequential']
+    dataset_variations  = ['stratified', 'alternative']
+    # dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
