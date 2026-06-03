@@ -1142,8 +1142,8 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            'output_dir'   : './experiments/1024',
-            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/123',
+            # 'output_dir'   : './experiments/1024',
+            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1285,11 +1285,11 @@ def main():
 
         data_root = default_config['data']['data_root']
         data_root = f'{data_root}/{dataset_variation}'
+        image_size = default_config['data']['image_size']
         output_dir = default_config['system']['output_dir']
-
         seed = default_config['system']['seed']
 
-        output_dir = f'{output_dir}/{seed}/{dataset_variation}'
+        output_dir = f'{output_dir}/{image_size}/{seed}/{dataset_variation}'
 
         default_config['data']['data_root'] = data_root
         default_config['system']['output_dir'] = output_dir
