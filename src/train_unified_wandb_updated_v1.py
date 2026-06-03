@@ -18,7 +18,7 @@ from src.models import get_model
 from src.utils.losses import get_loss_function
 from src.dataset.dataset_loader import get_training_dataloaders
 from src.utils.metrics import SegmentationMetrics
-from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_v1_fine_tuned
+# from src.train_unified_wandb_sam_v1 import train_single_model as train_single_model_sam_v1_fine_tuned
 from src.train_unified_wandb_sam_v2_1 import train_single_model as train_single_model_sam_v2_fine_tuned
 from src.train_unified_wandb_dinov2 import train_single_model as train_single_model_dinov2_Mask2Former
 
@@ -1252,8 +1252,8 @@ def train_all_models(base_config: dict):
             print(f'train_single_model|config: {config}')
             if model_name == 'sam_v2_fine_tuned':
                 train_single_model_sam_v2_fine_tuned(config)
-            elif model_name == 'sam_v1_fine_tuned':
-                train_single_model_sam_v1_fine_tuned(config)
+            # elif model_name == 'sam_v1_fine_tuned':
+            #     train_single_model_sam_v1_fine_tuned(config)
             elif model_name == 'dinov2_Mask2Former':
                 train_single_model_dinov2_Mask2Former(config)
             else:
