@@ -49,7 +49,7 @@ def create_dataset(data_dir, split):
 #     return data
 
 
-def create_sam2_dataset(data_dir, split, batch_size):
+def create_sam2_dataset(data_dir, split, batch_size, img_size):
     data_dir = f'{data_dir}/{split}'
     print(f'data_dir: {data_dir} and split: {split}')
 
@@ -59,7 +59,7 @@ def create_sam2_dataset(data_dir, split, batch_size):
         image_path = data_dir + "/images/" + name
         mask_path = data_dir + "/masks/" + name[:-4] + ".png"
 
-        image, mask, points, labels_size = format_dataset_item(image_path, mask_path)
+        image, mask, points, labels_size = format_dataset_item(image_path, mask_path, img_size)
 
         data.append({
             'image': image,
@@ -72,12 +72,12 @@ def create_sam2_dataset(data_dir, split, batch_size):
     batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
     return batches
 
-def format_dataset_item(image_path,  mask_path):
+def format_dataset_item(image_path,  mask_path, img_size):
     img = cv2.imread(image_path)[..., ::-1]  # read image
     ann_map = cv2.imread(mask_path)  # read annotation
 
     # resize image
-    r = np.min([512 / img.shape[1], 512 / img.shape[0]])  # scalling factor
+    r = np.min([img_size / img.shape[1], img_size / img.shape[0]])  # scalling factor
     img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
     ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)),
                          interpolation=cv2.INTER_NEAREST)
@@ -131,254 +131,5 @@ def view_sample_from_dataset(dataset):
     # Display the images side by side
     plt.show()
 
-def get_bounding_box(ground_truth_map):
-    # Ensure it is a numpy array for calculations
-    ground_truth_map = np.array(ground_truth_map)
-    y_indices, x_indices = np.where(ground_truth_map > 0)
-    
-    # Handle images with no river pixels to prevent min/max errors
-    if len(x_indices) == 0:
-        return [0, 0, ground_truth_map.shape[1], ground_truth_map.shape[0]]
-        
-    x_min, x_max = np.min(x_indices), np.max(x_indices)
-    y_min, y_max = np.min(y_indices), np.max(y_indices)
-    
-    # Add perturbation
-    H, W = ground_truth_map.shape
-    x_min = max(0, x_min - np.random.randint(0, 20))
-    x_max = min(W, x_max + np.random.randint(0, 20))
-    y_min = max(0, y_min - np.random.randint(0, 20))
-    y_max = min(H, y_max + np.random.randint(0, 20))
-    
-    # Return as floats for the processor
-    return [float(x_min), float(y_min), float(x_max), float(y_max)]
 
-class SAMDataset(Dataset):
-    def __init__(self, dataset, processor):
-        self.dataset = dataset
-        self.processor = processor
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-        
-        # FIX 1: Convert nested lists back to NumPy arrays to prevent processor recursion error
-        image = np.array(item["image"], dtype=np.uint8)
-        ground_truth_mask = np.array(item["label"], dtype=np.uint8)
-        ground_truth_mask = (ground_truth_mask > 0).astype(np.float32)
-
-        # Get bounding box prompt
-        prompt = get_bounding_box(ground_truth_mask)
-
-        # Prepare image and prompt for the model
-        # input_boxes expects (batch, num_boxes, 4). [[prompt]] provides (1, 1, 4)
-        inputs = self.processor(image, input_boxes=[[prompt]], return_tensors="pt")
-
-        # Remove batch dimension which the processor adds by default
-        inputs = {k: v.squeeze(0) for k, v in inputs.items()}
-
-        # Add ground truth segmentation as a torch tensor
-        inputs["ground_truth_mask"] = torch.from_numpy(ground_truth_mask).float()
-        inputs["image"] = image
-        inputs["mask"] = ground_truth_mask
-        inputs["image_path"] = item["image_path"]
-        inputs["image_full_path"] = item["image_full_path"]
-
-        return inputs
-
-def visualize_bbox_perturbation(image, mask, n_samples=3):
-    """
-    Visualizes the river image, mask, and the perturbed bounding box.
-    """
-    fig, axes = plt.subplots(1, n_samples, figsize=(18, 6))
-    
-    for i in range(n_samples):
-        # Generate box using your function
-        bbox = get_bounding_box(mask) # [x_min, y_min, x_max, y_max]
-        
-        axes[i].imshow(image)
-        # Overlay the mask with low opacity
-        axes[i].imshow(mask, alpha=0.3, cmap='Blues')
-        
-        # Create a Rectangle patch
-        # Rectangle expects (x, y), width, height
-        rect = patches.Rectangle(
-            (bbox[0], bbox[1]), 
-            bbox[2] - bbox[0], 
-            bbox[3] - bbox[1], 
-            linewidth=2, edgecolor='r', facecolor='none', linestyle='--'
-        )
-        
-        axes[i].add_patch(rect)
-        axes[i].set_title(f"Perturbed BBox Analysis {i+1}")
-        axes[i].axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
-class SAM2Dataset(Dataset):
-    def __init__(self, data_list):
-        self.data_list = data_list
-
-    def __len__(self):
-        return len(self.data_list)
-
-    def __getitem__(self, idx):
-        # Use your existing logic (or a modified version of read_batch)
-        # We return a single item here; DataLoader will batch them
-        img, masks, points, labels = read_batch([self.data_list[idx]]) 
-        
-        # Convert to Tensors
-        img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
-        mask_tensor = torch.from_numpy(masks).float()
-        point_tensor = torch.from_numpy(points).float()
-        label_tensor = torch.from_numpy(labels).float()
-
-        # return {
-        #     'img': img_tensor,
-        #     'mask': mask_tensor,
-        #     'point': point_tensor,
-        #     'label': label_tensor
-        # }
-        return img, masks, points, labels
-
-        # return img_tensor, mask_tensor, point_tensor, label_tensor
-
-# [{'image': './dataset/processed_512_resized/stratified/train/images/DJI_20250324094700_0120_V.jpg', 'annotation': './dataset/processed_512_resized/stratified/train/masks/DJI_20250324094700_0120_V.png'}]
-def read_batch(item): 
-    image_path = item[0]['image']
-    mask_path = item[0]['annotation']
-    img = cv2.imread(image_path)[...,::-1]  # read image
-    ann_map = cv2.imread(mask_path) # read annotation
-
-   # resize image
-    r = np.min([512 / img.shape[1], 512 / img.shape[0]]) # scalling factor
-    img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
-    ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)),interpolation=cv2.INTER_NEAREST)
-
-   # merge vessels and materials annotations
-    mat_map = ann_map[:,:,0] # material annotation map
-    ves_map = ann_map[:,:,2] # vessel  annotaion map
-
-    offset = mat_map.max()
-    merge_mask = (mat_map == 0) & (ves_map > 0)
-    mat_map[merge_mask] = ves_map[merge_mask] + offset
-
-    # Get binary masks and points
-    inds = np.unique(mat_map)
-    inds = inds[inds > 0]
-
-    points= []
-    masks = [] 
-    for ind in inds:
-        mask=(mat_map == ind).astype(np.uint8) # make binary mask
-        masks.append(mask)
-        coords = np.argwhere(mask > 0) # get all coordinates in mask
-        yx = np.array(coords[np.random.randint(len(coords))]) # choose random point/coordinate
-        points.append([[yx[1], yx[0]]])
-        
-    return img, np.array(masks), np.array(points), np.ones([len(masks),1])
-
-if __name__ == '__main__':
-    # FIX 2: Use raw string for Windows paths to avoid SyntaxWarning
-    data_dir = r'dataset\processed_512_resized\sequential'
-    dataset = create_dataset(data_dir, 'train')
-    
-    processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
-    train_dataset = SAMDataset(dataset=dataset, processor=processor)
-
-    train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    
-    # FIX 3: Correct unpacking of the dictionary batch
-    batch = next(iter(train_dataloader))
-    print(f"Batch keys: {batch.keys()}")
-    
-    train_features = batch['pixel_values']
-    train_labels = batch['ground_truth_mask']
-    print(f"Images shape: {train_features.shape}")
-    print(f"Masks shape: {train_labels.shape}")
-
-    image = batch['image']
-    mask = batch['mask']
-    print(f"image shape: {image.shape}")
-    print(f"mask shape: {mask.shape}")
-
-    # from transformers import SamModel
-    # model = SamModel.from_pretrained("facebook/sam-vit-base")
-    #
-    # # make sure we only compute gradients for mask decoder
-    # for name, param in model.named_parameters():
-    #     if name.startswith("vision_encoder") or name.startswith("prompt_encoder"):
-    #         param.requires_grad_(False)
-    #
-    # from torch.optim import Adam
-    # # Initialize the optimizer and the loss function
-    # optimizer = Adam(model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
-    # #Try DiceFocalLoss, FocalLoss, DiceCELoss
-    # criterion = get_loss_function(
-    #             'combined',
-    #             bce_weight      = 1.0,
-    #             dice_weight     = 1.0,
-    #             boundary_weight = 1.0,
-    #             use_boundary    = False,
-    #         )
-    #
-    # from tqdm import tqdm
-    # from statistics import mean
-    # import torch
-    # from torch.nn.functional import threshold, normalize
-    #
-    # #Training loop
-    # num_epochs = 1
-    #
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
-    # model.to(device)
-    #
-    # model.train()
-    # for epoch in range(num_epochs):
-    #     epoch_losses = []
-    #     for batch in tqdm(train_dataloader):
-    #         # forward pass
-    #         outputs = model(pixel_values=batch["pixel_values"].to(device),
-    #                         input_boxes=batch["input_boxes"].to(device),
-    #                         multimask_output=False)
-    #
-    #         # compute loss
-    #         predicted_masks = outputs.pred_masks
-    #         print(f'predicted_masks type: {type(predicted_masks)}')
-    #         print(f'predicted_masks shape: {predicted_masks.shape}')
-    #
-    #         predicted_masks = predicted_masks.squeeze(1).squeeze(1)
-    #         print(f'predicted_masks type: {type(predicted_masks)}')
-    #         print(f'predicted_masks shape: {predicted_masks.shape}')
-    #
-    #         # 3. Upsample to your Ground Truth size (e.g., 512x512)
-    #         # Resulting shape: [4, 512, 512]
-    #         predicted_masks = F.interpolate(
-    #             predicted_masks.unsqueeze(1), # interpolate expects [B, C, H, W], so add '1' channel
-    #             size=(512, 512),
-    #             mode='bilinear',
-    #             align_corners=False
-    #         ).squeeze(1) # Remove the channel dimension again if doing Binary Loss
-    #
-    #         print(f'predicted_masks type: {type(predicted_masks)}')
-    #         print(f'predicted_masks shape: {predicted_masks.shape}')
-    #
-    #         ground_truth_masks = batch["ground_truth_mask"].float().to(device)
-    #         print(f'ground_truth_masks type: {type(ground_truth_masks)}')
-    #         print(f'ground_truth_masks shape: {ground_truth_masks.shape}')
-    #         loss, loss_dict = criterion(predicted_masks, ground_truth_masks, None)
-    #
-    #         # backward pass (compute gradients of parameters w.r.t. loss)
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #
-    #         # optimize
-    #         optimizer.step()
-    #         epoch_losses.append(loss.item())
-    #
-    #     print(f'EPOCH: {epoch}')
-    #     print(f'Mean loss: {mean(epoch_losses)}')
 
