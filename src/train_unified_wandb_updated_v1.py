@@ -1100,8 +1100,8 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_1024_resized',
-            'image_size'   : 1024,
+            'data_root'    : './dataset/processed_768_resized',
+            'image_size'   : 768,
             'augment_train': True
         },
         'training': {
@@ -1270,8 +1270,8 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    dataset_variations  = ['sequential', 'stratified', 'alternative']
-    # dataset_variations  = ['stratified', 'alternative']
+    # dataset_variations  = ['sequential', 'stratified', 'alternative']
+    dataset_variations  = ['stratified', 'alternative']
     # dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
