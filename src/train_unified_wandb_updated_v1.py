@@ -1199,23 +1199,32 @@ def train_all_models(base_config: dict):
     #     'sam_v2_fine_tuned'   : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     # }
 
+    MODELS = {
+        'UNetPlusPlus': ('UNet++', 'CNN'),
+        'DeepLabV3Plus': ('DeepLabV3+', 'CNN'),
+        'ConvNeXt_UPerNet': ('ConvNeXt-UPerNet', 'Hybrid'),
+        'SegFormer_B3': ('SegFormer-B3', 'Transformer'),
+        'SAM_FPN_ViTH': ('SAM-FPN ViT-H', 'Foundation'),
+        'DINOv2_DPT': ('DINOv2-DPT', 'Foundation'),
+    }
+
     all_models = {
         # CNN baselines = 5
         'unet': [],
-        'unetpp': [],
-        'resunetpp': [],
+        # 'unetpp': [],
+        # 'resunetpp': [],
         'deeplabv3plus': [],
-        'deeplabv3plus_cbam': [],
+        # 'deeplabv3plus_cbam': [],
         # Transformers = 3
         'segformer': ['b0'],
-        'swin_unet': ['tiny'],
+        # 'swin_unet': ['tiny'],
         # Hybrid SOTA = 6
         'convnext_upernet': ['tiny'],
-        'hrnet_ocr': ['w18'],
+        # 'hrnet_ocr': ['w18'],
         # Foundation models = 15
-        'sam': ['vit_b'],
+        # 'sam': ['vit_b'],
         'sam_fpn': ['vit_b'],
-        'dinov2': ['vit_s'],
+        # 'dinov2': ['vit_s'],
         'dinov2_Mask2Former': ['vit_s'],
         # 'sam_v1_fine_tuned'   : ['vit_b', 'vit_l', 'vit_h'],
         'sam_v2_fine_tuned': ['sam2.1_hiera_tiny'],
