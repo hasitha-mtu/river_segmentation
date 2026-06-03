@@ -1100,8 +1100,8 @@ def get_default_config():
             'n_classes' : 1,
         },
         'data': {
-            'data_root'    : './dataset/processed_768_resized',
-            'image_size'   : 768,
+            'data_root'    : './dataset/processed_1024_resized',
+            'image_size'   : 1024,
             'augment_train': True
         },
         'training': {
@@ -1133,7 +1133,7 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2.5',
+            'wandb_project'   : 'river-segmentation-v2.6',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
@@ -1142,8 +1142,8 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            # 'output_dir'   : './experiments/1024',
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
+            'output_dir'   : './experiments/',
+            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1270,8 +1270,8 @@ def train_all_models(base_config: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    dataset_variations  = ['stratified', 'alternative']
+    dataset_variations  = ['sequential', 'stratified', 'alternative']
+    # dataset_variations  = ['stratified', 'alternative']
     # dataset_variations  = ['sequential']
     for dataset_variation in dataset_variations:
 
