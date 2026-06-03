@@ -1199,14 +1199,6 @@ def train_all_models(base_config: dict):
     #     'sam_v2_fine_tuned'   : ['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus'],
     # }
 
-    MODELS = {
-        'UNetPlusPlus': ('UNet++', 'CNN'),
-        'DeepLabV3Plus': ('DeepLabV3+', 'CNN'),
-        'ConvNeXt_UPerNet': ('ConvNeXt-UPerNet', 'Hybrid'),
-        'SegFormer_B3': ('SegFormer-B3', 'Transformer'),
-        'SAM_FPN_ViTH': ('SAM-FPN ViT-H', 'Foundation'),
-        'DINOv2_DPT': ('DINOv2-DPT', 'Foundation'),
-    }
 
     all_models = {
         # CNN baselines = 5
