@@ -97,8 +97,8 @@ class UnifiedTrainer:
         self.img_size   = config['data']['image_size']
 
         print(f'Loading data from {data_root}…')
-        self.train_dataset      = create_sam2_dataset(data_root, 'train', self.batch_size)
-        self.validation_dataset = create_sam2_dataset(data_root, 'val',   self.batch_size)
+        self.train_dataset      = create_sam2_dataset(data_root, 'train', self.batch_size, self.img_size)
+        self.validation_dataset = create_sam2_dataset(data_root, 'val',   self.batch_size, self.img_size)
         print(f'  train: {len(self.train_dataset)} samples  |  val: {len(self.validation_dataset)} samples')
         print(f'  Image size: {self.img_size}×{self.img_size}')
 
