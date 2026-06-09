@@ -1142,8 +1142,8 @@ def get_default_config():
         'system': {
             'seed'         : 42,
             'num_workers'  : 0,
-            'output_dir'   : './experiments/',
-            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
+            # 'output_dir'   : './experiments/',
+            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
             'log_interval' : 10,
             'save_interval': 10,
         },
