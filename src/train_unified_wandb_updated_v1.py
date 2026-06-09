@@ -1101,7 +1101,7 @@ def get_default_config():
         },
         'data': {
             'data_root'    : './dataset/processed_512_resized',
-            'image_size'   : 456,
+            'image_size'   : 512,
             'augment_train': True
         },
         'training': {
@@ -1140,10 +1140,10 @@ def get_default_config():
             'save_model_wandb': True,
         },
         'system': {
-            'seed'         : 42,
+            'seed'         : 123,
             'num_workers'  : 0,
-            # 'output_dir'   : './experiments/',
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
+            'output_dir'   : './experiments/',
+            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1271,8 +1271,8 @@ def train_all_models(base_config: dict):
 
 def main():
     # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    # dataset_variations  = ['stratified', 'alternative']
-    dataset_variations  = ['stratified']
+    dataset_variations  = ['stratified', 'alternative']
+    # dataset_variations  = ['stratified']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
