@@ -1101,7 +1101,7 @@ def get_default_config():
         },
         'data': {
             'data_root'    : './dataset/processed_512_resized',
-            'image_size'   : 123,
+            'image_size'   : 456,
             'augment_train': True
         },
         'training': {
@@ -1133,7 +1133,7 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2.7',
+            'wandb_project'   : 'river-segmentation-v2.8',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
@@ -1271,8 +1271,8 @@ def train_all_models(base_config: dict):
 
 def main():
     # dataset_variations  = ['sequential', 'stratified', 'alternative']
-    dataset_variations  = ['stratified', 'alternative']
-    # dataset_variations  = ['stratified']
+    # dataset_variations  = ['stratified', 'alternative']
+    dataset_variations  = ['stratified']
     for dataset_variation in dataset_variations:
 
         default_config = get_default_config()
