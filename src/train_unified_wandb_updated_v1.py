@@ -1133,17 +1133,17 @@ def get_default_config():
         },
         'logging': {
             'use_wandb'       : True,
-            'wandb_project'   : 'river-segmentation-v2.9',
+            'wandb_project'   : 'river-segmentation-v2.8',
             'wandb_notes'     : 'UAV river segmentation — global-local dual-branch',
             'watch_model'     : False,
             'log_images'      : True,
             'save_model_wandb': True,
         },
         'system': {
-            'seed'         : 456,
+            'seed'         : 123,
             'num_workers'  : 0,
-            # 'output_dir'   : './experiments/',
-            'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
+            'output_dir'   : './experiments/',
+            # 'output_dir'   : r'D:/hasitha/river_segmentation/experiments/',
             'log_interval' : 10,
             'save_interval': 10,
         },
@@ -1179,19 +1179,19 @@ def train_all_models(base_config: dict):
     print(f'train_all_models|base_config: {base_config}')
     all_models = {
         # CNN baselines = 5
-        'unet'                : [],
-        'unetpp'              : [],
-        'resunetpp'           : [],
-        'deeplabv3plus'       : [],
-        'deeplabv3plus_cbam'  : [],
-        # Transformers = 3
-        'segformer'           : ['b0', 'b2'],
-        'swin_unet'           : ['tiny'],
-        # Hybrid SOTA = 6
-        'convnext_upernet'    : ['tiny', 'small', 'base'],
-        'hrnet_ocr'           : ['w18', 'w32', 'w48'],
-        # Foundation models = 15
-        'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
+        # 'unet'                : [],
+        # 'unetpp'              : [],
+        # 'resunetpp'           : [],
+        # 'deeplabv3plus'       : [],
+        # 'deeplabv3plus_cbam'  : [],
+        # # Transformers = 3
+        # 'segformer'           : ['b0', 'b2'],
+        # 'swin_unet'           : ['tiny'],
+        # # Hybrid SOTA = 6
+        # 'convnext_upernet'    : ['tiny', 'small', 'base'],
+        # 'hrnet_ocr'           : ['w18', 'w32', 'w48'],
+        # # Foundation models = 15
+        # 'sam'                 : ['vit_b', 'vit_l', 'vit_h'],
         'sam_fpn'             : ['vit_b', 'vit_l', 'vit_h'],
         'dinov2'              : ['vit_s', 'vit_b', 'vit_l',],
         'dinov2_Mask2Former'  : ['vit_s', 'vit_b', 'vit_l',],
