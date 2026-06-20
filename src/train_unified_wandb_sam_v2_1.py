@@ -719,8 +719,8 @@ class UnifiedTrainer:
         if self.use_wandb:
             wandb.finish()
 
-def get_sam2_dataset(data_root, batch_size):
-    dataset = create_sam2_dataset(data_root, 'test', batch_size)
+def get_sam2_dataset(data_root, batch_size, image_size):
+    dataset = create_sam2_dataset(data_root, 'test', batch_size, image_size)
     return dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
