@@ -88,6 +88,7 @@ class TestDataset(Dataset):
 
         print(f'  [TestDataset] {len(self.samples)} samples in {split} split.')
 
+        self.image_size = image_size  # stored for dummy mask fallback
         self.img_tf = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
@@ -1134,6 +1135,39 @@ def parse_args():
     return p.parse_args()
 
 
+def _resolve_image_size(config: dict, resolution: str) -> int:
+    """
+    Derive the pixel image size to use for dataset loading.
+
+    Primary source: config['data']['image_size'] embedded in the checkpoint.
+    This is the ground truth — it was set at training time and is always correct
+    regardless of what folder the checkpoint lives in.
+
+    Fallback: parse the pixel size from the resolution folder name.
+    This handles the case where older checkpoints were saved without the
+    image_size key.  Note that '512_1' and '512_2' are run identifiers, NOT
+    pixel sizes, so we strip the '_1'/'_2' suffix before parsing.
+
+    Examples:
+        resolution='512_1'  → fallback pixel size 512
+        resolution='512_2'  → fallback pixel size 512
+        resolution='768'    → fallback pixel size 768
+        resolution='1024'   → fallback pixel size 1024
+    """
+    # Try the checkpoint config first — most reliable
+    if 'data' in config and 'image_size' in config['data']:
+        return int(config['data']['image_size'])
+
+    # Fallback: parse from folder name, stripping run suffix (_1, _2, etc.)
+    base = resolution.split('_')[0]   # '512_1' → '512', '768' → '768'
+    try:
+        return int(base)
+    except ValueError:
+        print(f'  [WARN] Cannot parse image size from resolution "{resolution}" '
+              f'and config has no image_size — defaulting to 512.')
+        return 512
+
+
 def _resolve_data_root_base(args) -> str:
     """
     Return the correct dataset base directory for the requested resolution.
@@ -1142,6 +1176,9 @@ def _resolve_data_root_base(args) -> str:
         512_1, 512_2  →  processed_512_resized
         768           →  processed_768_resized
         1024          →  processed_1024_resized
+
+    Note: '512_1' and '512_2' are experiment run identifiers, not pixel sizes.
+    Both map to the same 512-pixel dataset directory.
     """
     r = args.resolution
     if r in ('512_1', '512_2'):
@@ -1233,7 +1270,11 @@ def main():
         print(f'Model : {display_name}  [{family}]')
 
         # ── Build dataloader (always using split_data_root) ───────────────────
-        image_size = config['data'].get('image_size', 512)
+        # image_size comes from the checkpoint config (set at training time).
+        # For 512_1/512_2 runs the folder name is a run ID, not a pixel size —
+        # _resolve_image_size handles that distinction explicitly.
+        image_size = _resolve_image_size(config, args.resolution)
+        print(f'  Image size (for dataset loading): {image_size}')
         try:
             if model_name == 'sam':
                 # SAM was trained with ResizeLongestSide(1024) + SAM normalisation.
@@ -1252,7 +1293,7 @@ def main():
                     pin_memory=(device.type == 'cuda'),
                 )
             elif model_name == 'sam_v2_fine_tuned':
-                test_loader = get_sam2_dataset(str(split_data_root), args.batch_size)
+                test_loader = get_sam2_dataset(str(split_data_root), args.batch_size, image_size)
             else:
                 test_ds = TestDataset(
                     data_root  = str(split_data_root),
